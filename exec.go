@@ -5,6 +5,7 @@
 package regexp
 
 import (
+	"fmt"
 	"io"
 	"regexp/syntax"
 )
@@ -38,12 +39,13 @@ type machine struct {
 	re             *Regexp      // corresponding Regexp
 	p              *syntax.Prog // compiled program
 	op             *onePassProg // compiled onepass program, or notOnePass
-	maxBitStateLen int          // max length of string to search with bitstate
-	b              *bitState    // state for backtracker, allocated lazily
-	q0, q1         queue        // two queues for runq, nextq
-	pool           []*thread    // pool of available threads
-	matched        bool         // whether a match was found
-	matchcap       []int        // capture information for the match
+	dfa            *DFA
+	maxBitStateLen int       // max length of string to search with bitstate
+	b              *bitState // state for backtracker, allocated lazily
+	q0, q1         queue     // two queues for runq, nextq
+	pool           []*thread // pool of available threads
+	matched        bool      // whether a match was found
+	matchcap       []int     // capture information for the match
 
 	// cached inputs, to avoid allocation
 	inputBytes  inputBytes
@@ -451,6 +453,17 @@ func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap i
 			return nil
 		}
 	} else {
+		if ncap <= 2 {
+			if DebugDFA {
+				fmt.Println("using dfa matcher")
+			}
+			if m.dfa == nil {
+				m.dfa = newDFA(re.prog, longestMatch, 10000)
+				m.dfa.BuildAllStates()
+			}
+			m.matchcap[0], m.matchcap[1], _ = m.dfa.search(i)
+			return nil
+		}
 		m.init(ncap)
 		if !m.match(i, pos) {
 			re.put(m)

@@ -82,6 +82,16 @@ func Compile(re *Regexp) (*Prog, error) {
 	c.init()
 	f := c.compile(re)
 	f.out.patch(c.p, c.inst(InstMatch).i)
+	// TODO(matloob): do this better and faster!
+	ds, err := Parse(".*", Flags(0))
+	if err != nil {
+		panic("i should always be able to parse .*")
+	}
+	ds.Simplify()
+	dsf := c.compile(ds)
+	dsf.out.patch(c.p, f.i)
+	c.p.StartUnanchored = int(dsf.i)
+	// TODO(matloob): end of area that needs to be cleaned up
 	c.p.Start = int(f.i)
 	return c.p, nil
 }

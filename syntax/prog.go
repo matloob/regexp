@@ -15,9 +15,10 @@ import (
 
 // A Prog is a compiled regular expression program.
 type Prog struct {
-	Inst   []Inst
-	Start  int // index of start instruction
-	NumCap int // number of InstCapture insts in re
+	Inst            []Inst
+	Start           int // index of start instruction
+	StartUnanchored int // index of start instruction for unanchored search
+	NumCap          int // number of InstCapture insts in re
 }
 
 // An InstOp is an instruction opcode.
