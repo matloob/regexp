@@ -6,7 +6,7 @@ package regexp
 
 import (
 	"bytes"
-	"regexp/syntax"
+	"matloob.io/regexp/syntax"
 	"sort"
 	"unicode"
 )

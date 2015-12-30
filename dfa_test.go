@@ -1,7 +1,7 @@
 package regexp
 
 import (
-	"regexp/syntax"
+	"matloob.io/regexp/syntax"
 	"testing"
 )
 

@@ -5,8 +5,8 @@
 package regexp
 
 import (
+	"matloob.io/regexp/syntax"
 	"reflect"
-	"regexp/syntax"
 	"strings"
 	"testing"
 )

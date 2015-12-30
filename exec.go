@@ -7,7 +7,7 @@ package regexp
 import (
 	"fmt"
 	"io"
-	"regexp/syntax"
+	"matloob.io/regexp/syntax"
 )
 
 // A queue is a 'sparse array' holding pending threads of execution.

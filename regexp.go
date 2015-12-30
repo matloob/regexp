@@ -62,12 +62,12 @@
 //
 // (There are a few other methods that do not match this pattern.)
 //
-package regexp
+package regexp // import "matloob.io/regexp"
 
 import (
 	"bytes"
 	"io"
-	"regexp/syntax"
+	"matloob.io/regexp/syntax"
 	"strconv"
 	"strings"
 	"sync"
