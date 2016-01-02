@@ -73,6 +73,7 @@ type frag struct {
 
 type compiler struct {
 	p *Prog
+	reversed bool
 }
 
 // Compile compiles the regexp into a program to be executed.
@@ -82,16 +83,29 @@ func Compile(re *Regexp) (*Prog, error) {
 	c.init()
 	f := c.compile(re)
 	f.out.patch(c.p, c.inst(InstMatch).i)
+
 	// TODO(matloob): do this better and faster!
 	ds, err := Parse(".*", Flags(0))
 	if err != nil {
 		panic("i should always be able to parse .*")
 	}
 	ds.Simplify()
-	dsf := c.compile(ds)
+	dsf := c.quest(c.compile(ds), true)
 	dsf.out.patch(c.p, f.i)
 	c.p.StartUnanchored = int(dsf.i)
 	// TODO(matloob): end of area that needs to be cleaned up
+
+	c.p.Start = int(f.i)
+	return c.p, nil
+}
+
+// CompileReversed compiles the regexp into a reverse program.
+func CompileReversed(re *Regexp) (*Prog, error) {
+	var c compiler
+	c.init()
+	c.reversed = true
+	f := c.compile(re)
+	f.out.patch(c.p, c.inst(InstMatch).i)
 	c.p.Start = int(f.i)
 	return c.p, nil
 }
@@ -132,12 +146,24 @@ func (c *compiler) compile(re *Regexp) frag {
 	case OpAnyChar:
 		return c.rune(anyRune, 0)
 	case OpBeginLine:
+		if c.reversed {
+			return c.empty(EmptyBeginLine)
+		}
 		return c.empty(EmptyBeginLine)
 	case OpEndLine:
+		if c.reversed {
+			return c.empty(EmptyEndLine)
+		}
 		return c.empty(EmptyEndLine)
 	case OpBeginText:
+		if c.reversed {
+			return c.empty(EmptyEndText)
+		}
 		return c.empty(EmptyBeginText)
 	case OpEndText:
+		if c.reversed {
+			return c.empty(EmptyBeginText)
+		}
 		return c.empty(EmptyEndText)
 	case OpWordBoundary:
 		return c.empty(EmptyWordBoundary)
@@ -213,6 +239,10 @@ func (c *compiler) cat(f1, f2 frag) frag {
 
 	// TODO: elide nop
 
+	if c.reversed {
+		f2.out.patch(c.p, f1.i)
+		return frag{f2.i, f1.out}
+	}
 	f1.out.patch(c.p, f2.i)
 	return frag{f1.i, f2.out}
 }

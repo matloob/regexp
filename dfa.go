@@ -38,28 +38,7 @@ type State struct {
 }
 
 func dumpState(state *State) string {
-	if state == nil {
-		return "_"
-	}
-	if state == deadState {
-		return "X"
-	}
-	if state == fullMatchState {
-		return "*"
-	}
-	var buf bytes.Buffer
-	sep := ""
-	for inst := range state.inst {
-		if inst == int(mark) {
-			buf.WriteString("|")
-			sep = ""
-		} else {
-			fmt.Fprintf(&buf, "%s%d", sep, inst)
-			sep = ","
-		}
-	}
-	fmt.Fprintf(&buf, " flag=%#x", state.flag)
-	return buf.String()
+	return state.Dump()
 }
 
 type flag uint16
@@ -264,6 +243,7 @@ func (q *workq) elements() []int { // should be []stateInst. Should we convert s
 
 type searchParams struct {
 	input input // StringPiece
+	startpos int
 	// text StringPiece
 	// context StringPiece
 	anchored          bool
@@ -354,7 +334,7 @@ func newDFA(prog *syntax.Prog, kind matchKind, maxMem int64) *DFA {
 	d := new(DFA)
 	d.prog = prog
 	d.kind = kind
-	d.startUnanchored = prog.StartUnanchored
+	d.startUnanchored = 0
 	d.initFailed = false // remove initFailed!! TODO(matloob)
 	d.memBudget = maxMem
 
@@ -369,8 +349,7 @@ func newDFA(prog *syntax.Prog, kind matchKind, maxMem int64) *DFA {
 	// We don't do that here.
 	if kind == longestMatch {
 		nmark = len(prog.Inst)
-		// TODO(matloob): we don't need this anymore, i think
-		// d.startUnanchored = d.prog.Start /* TODO(matloob): add unanchored .* to prog */
+		d.startUnanchored = prog.StartUnanchored
 	}
 	nastack := 2*len(prog.Inst) + nmark
 
@@ -389,35 +368,87 @@ func newDFA(prog *syntax.Prog, kind matchKind, maxMem int64) *DFA {
 	return d
 }
 
-func (d *DFA) search(i input) (int, int, bool) {
+func (d *DFA) search(i input, startpos int, reversed *DFA) (int, int, bool) {
 	params := searchParams{}
+	params.startpos = startpos
 	// params.wantEarliestMatch = true
+	params.input = i
 	params.runForward = true
 	if !d.analyzeSearch(&params) {
 		return -1, -1, false
 	}
+	rev := make([]rune, 0, 1000) // XXX this is bad bad
+	rev = append(rev, endOfText)
 	state := params.start
-	pos := 0
+	pos := params.startpos
+	lastMatch := -1
+	var lastMatchState *State
+	var revLength int
 	for r, w := i.step(pos); ; r, w = i.step(pos) {
+		rev = append(rev, r)
 		//		state = d.runStateOnByte(state, int(r))
 		state = state.next[d.byteMap(int(r))]
 		if state == nil {
-			fmt.Println("nil")
-			return -1, -1, false
+			break
 		}
 		if state == deadState {
+			break;
 			return -1, -1, false
 		}
 		if state.flag&flagMatch != 0 {
-			return 0, pos, true
+			lastMatch = pos
+			lastMatchState = state
+			revLength = len(rev)
 		}
 		if r == endOfText {
-			return -1, -1, false
+			break
 		}
 		pos += w
 	}
+	if lastMatchState == nil {
+		return -1, -1, false
+	}
+	pos = lastMatch
+	state = lastMatchState
+//revloop: // XXX bad bad bad bad bad
+	params = searchParams{}
+	params.runForward = true
+	params.startpos = pos -1
+	params.input = i
+	params.anchored = true
+	if reversed == nil || !reversed.analyzeSearch(&params) {
+		return -1, -1, false
+	}
+	state = params.start
+	if state.flag & flagMatch != 0 {
+		return pos, pos, true
+	}
+	rev = rev[:revLength]
+	lastMatchStart := 0
+	for p := len(rev) -2; p >= 0; p-- {
+		r := rev[p]
+	//	fmt.Println("r: ", string(r))
+		state = state.next[reversed.byteMap(int(r))]
+	//	fmt.Println(state.Dump())
+		if state.flag&flagMatch != 0 {
+			// we found the start! hooray!
+			// This only works because we only accept chars < 255!
+			lastMatchStart = pos-(len(rev)-2-p)
+			// return pos-(len(rev) - 2-p), pos, true
+		}
+		if  state == deadState { return lastMatchStart, pos, true }
+		if r == endOfText {
+			break
+			panic("end of text")
+ 		}
+		if state == nil { panic("nil state") }
+	}
+
+	return lastMatchStart, pos, true
+
 	return -1, -1, false
 }
+
 
 // BuildAllStates
 func (d *DFA) BuildAllStates() int {
@@ -425,8 +456,12 @@ func (d *DFA) BuildAllStates() int {
 
 	// Pick out start state for unanchored search at beginning of text.
 	// d.cacheMutex.Lock()
-	params := searchParams{ /* null, null, lock */ }
-	params.anchored = false
+	params := searchParams{ input: &inputString{""} /* null, null, lock */ }
+	params.anchored = true
+	if d.prog.StartUnanchored != 0 {
+		// XXX better check here
+		params.anchored = false
+	}
 	if !d.analyzeSearch(&params) || isSpecialState(params.start) {
 		return 0
 	}
@@ -462,11 +497,13 @@ func (d *DFA) analyzeSearch(params *searchParams) bool {
 	var start int
 	var flags flag
 	if params.runForward {
-		flags = 0 // input.context(0) // are we starting from the beginning?
+		flags = 0 // input.context(params.startpos) // are we starting from the beginning?
 		// can we access the context from
 	} else {
 		// TODO(matloob) set flags properly !!!
-		flags = 0 // input.context(0)
+		flags = flag(input.context(params.startpos))
+//		fmt.Println("flags:", flags)
+		// flags = flag(input.context(params.startpos))
 		_ = input
 	}
 	if params.anchored /* || prog.anchorStart() */ {

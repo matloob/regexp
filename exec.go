@@ -39,7 +39,7 @@ type machine struct {
 	re             *Regexp      // corresponding Regexp
 	p              *syntax.Prog // compiled program
 	op             *onePassProg // compiled onepass program, or notOnePass
-	dfa            *DFA
+	dfa, revdfa            *DFA
 	maxBitStateLen int       // max length of string to search with bitstate
 	b              *bitState // state for backtracker, allocated lazily
 	q0, q1         queue     // two queues for runq, nextq
@@ -461,14 +461,38 @@ func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap i
 				m.dfa = newDFA(re.prog, longestMatch, 10000)
 				m.dfa.BuildAllStates()
 			}
-			m.matchcap[0], m.matchcap[1], _ = m.dfa.search(i)
-			return nil
+			if m.revdfa == nil {
+				// XXX find me a good home
+				// recreate syntax.Regexp (we shouldn't need to do thi)
+				re, err := syntax.Parse(re.expr, syntax.Perl)
+				if err != nil {
+					panic("parse failed")
+				}
+				re.Simplify()
+				revprog, err := syntax.CompileReversed(re)
+				if err != nil {
+					panic("CompileReversed failed")
+				}
+				m.revdfa = newDFA(revprog, longestMatch, 50000)
+				m.revdfa.BuildAllStates()
+			}
+			var matched bool
+			m.matchcap = m.matchcap[:ncap]
+			i, j, matched := m.dfa.search(i, pos, m.revdfa)
+			if ncap > 0 {
+				m.matchcap[0], m.matchcap[1] = i, j
+			}
+			if !matched {
+				return nil
+			}
+			goto e
 		}
 		m.init(ncap)
 		if !m.match(i, pos) {
 			re.put(m)
 			return nil
 		}
+		e:
 	}
 	if ncap == 0 {
 		re.put(m)
