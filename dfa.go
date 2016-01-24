@@ -45,7 +45,7 @@ type flag uint16
 
 var (
 	flagEmptyMask = flag(0xFFF)
-	flagMatch     = flag(0x1000)
+	flagMatch   = flag(0x1000)
 	flagLastWord  = flag(0x2000)
 	flagNeedShift = flag(16)
 )
@@ -80,6 +80,7 @@ var fullMatchState = &State{}
 func isSpecialState(s *State) bool {
 	// see above. cc does int comparison because deadState and fullMatchState
 	// are special numbers, but that's unsafe.
+	// TODO(matloob): convert states back to numbers. (pointers into state array state(-2) and state(-1))
 	return s == deadState || s == fullMatchState || s == nil
 }
 
@@ -311,6 +312,7 @@ const (
 
 type DFA struct {
 	// Constant after initialization.
+	regexp *Regexp // TODO(matloob): this isn't set yet...
 	prog            *syntax.Prog
 	kind            matchKind // kind of DFA
 	startUnanchored int       // start of unanchored program -- TODO(matloob): create this in compile?
@@ -1161,11 +1163,231 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 	bp := 0 // start of text
 	p := 0  // text scanning point
 	ep := 0 // end of text
+	if !runForward {
+		p, ep = ep, p
+	}
+
+	// const uint8* byte
 
 	_, _, _, _ = start, bp, p, ep
 
 	panic("inlined search loop not implemented")
 	return false
+
+	// const uint8* bytemap = prog_->bytemap()
+	var lastMatch int  // most recent matching position in text
+	matched := false
+	s := start
+
+	if s.IsMatch() {
+		match = true
+		lastMatch = p
+		if wantEarliestMatch {
+			params.ep = lastMatch
+			return true
+		}
+	}
+
+	while p != ep {
+		if DebugDFA {
+			fmt.Fprintf(os.Stderr, "@%d: %s\n", p - bp, s.dumpState())
+		}
+		if haveFirstbyte && s == start {
+			// TODO(matloob): Correct the comment
+			// In start state, only way out is to find firstbyte,
+			// so use optimized assembly in memchr to skip ahead.
+			// If firstbyte isn't found, we can skip to the end
+			// of the string.
+			if runForward {
+				p = input.index(p, regexp)
+				if p < 0 {
+					p = ep
+					break
+				}
+			} else {
+				panic(" not handled... reverse index !" )
+				p = input.rindex(ep, regexp)
+				if p < 0 {
+					p = ep
+					break
+				}
+				p++
+			}
+		}
+
+		var c int
+		if runForward {
+			c = p
+			p = input.next(p)
+		} else {
+			panic("not implemented")
+			p-- // go to previous rune!
+			c = p
+		}
+	}
+
+	// Note that multiple threads might be consulting
+	// s->next_[bytemap[c]] simultaneously.
+	// RunStateOnByte takes care of the appropriate locking,
+	// including a memory barrier so that the unlocked access
+	// (sometimes known as "double-checked locking") is safe.
+	// The alternative would be either one DFA per thread
+	// or one mutex operation per input byte.
+	//
+	// ns == DeadState means the state is known to be dead
+	// (no more matches are possible).
+	// ns == NULL means the state has not yet been computed
+	// (need to call RunStateOnByteUnlocked).
+	// RunStateOnByte returns ns == NULL if it is out of memory.
+	// ns == FullMatchState means the rest of the string matches.
+	//
+	// Okay to use bytemap[] not ByteMap() here, because
+	// c is known to be an actual byte and not kByteEndText.
+	var ns *State
+	// ATOMIC_LOAD_CONSUME(ns, &s->next_[bytemap[c]]);
+	ns = s.next[d.bytemap(c)]
+	if ns == nil {
+		/*
+		ns = RunStateOnByteUnlocked(s, c);
+		if (ns == NULL) {
+		  // After we reset the cache, we hold cache_mutex exclusively,
+		  // so if resetp != NULL, it means we filled the DFA state
+		  // cache with this search alone (without any other threads).
+		  // Benchmarks show that doing a state computation on every
+		  // byte runs at about 0.2 MB/s, while the NFA (nfa.cc) can do the
+		  // same at about 2 MB/s.  Unless we're processing an average
+		  // of 10 bytes per state computation, fail so that RE2 can
+		  // fall back to the NFA.
+		  if (FLAGS_re2_dfa_bail_when_slow && resetp != NULL &&
+		      (p - resetp) < 10*state_cache_.size()) {
+		    params->failed = true;
+		    return false;
+		  }
+		  resetp = p;
+
+		  // Prepare to save start and s across the reset.
+		  StateSaver save_start(this, start);
+		  StateSaver save_s(this, s);
+
+		  // Discard all the States in the cache.
+		  ResetCache(params->cache_lock);
+
+		  // Restore start and s so we can continue.
+		  if ((start = save_start.Restore()) == NULL ||
+		      (s = save_s.Restore()) == NULL) {
+		    // Restore already did LOG(DFATAL).
+		    params->failed = true;
+		    return false;
+		  }
+		  ns = RunStateOnByteUnlocked(s, c);
+		  if (ns == NULL) {
+		    LOG(DFATAL) << "RunStateOnByteUnlocked failed after ResetCache";
+		    params->failed = true;
+		    return false;
+		  }
+		}
+		*/
+
+	}
+
+	//  if (ns <= SpecialStateMax) {
+	if isSpecialState(ns) {
+		if ns == deadState {
+			params.ep = lastMatch
+			return matched
+		}
+		params.ep = ep
+		return true
+	}
+	s = ns
+
+	if s.isMatch() {
+		matched = true
+		// The DFA notices the match one rune late,
+		// so adjust p before using it in the match.
+		if runForward{
+			panic("previous rune!")
+			lastMatch = p - 1;
+		} else {
+			lastMatch = input.next(p)
+		}
+		if DebugDFA {
+			fmt.Fprintf(os.Stderr, "match @%d! [%s]\n", lastMatch - bp, s.DumpState()
+		}
+		if wantEarliestMatch {
+			params.ep = lastMatch
+			return true
+		}
+	}
+
+	// Process one more byte to see if it triggers a match.
+	// (Remember, matches are delayed one byte.)
+	var lastbyte int
+	if runForward {
+		/*
+		if (params->text.end() == params->context.end())
+	  		lastbyte = kByteEndText;
+	  	else
+	  		lastbyte = params->text.end()[0] & 0xFF;
+		*/
+	} else {
+		/*
+		if (params->text.begin() == params->context.begin())
+			lastbyte = kByteEndText;
+		else
+			lastbyte = params->text.begin()[-1] & 0xFF;
+		*/
+	}
+
+	var ns *State
+	// ATOMIC_LOAD_CONSUME(ns, &s->next_[ByteMap(lastbyte)]);
+	if ns != nil {
+/*
+		ns = RunStateOnByteUnlocked(s, lastbyte);
+		if (ns == NULL) {
+			StateSaver save_s(this, s);
+			ResetCache(params->cache_lock);
+			if ((s = save_s.Restore()) == NULL) {
+				params->failed = true;
+				return false;
+			}
+			ns = RunStateOnByteUnlocked(s, lastbyte);
+			if (ns == NULL) {
+				LOG(DFATAL) << "RunStateOnByteUnlocked failed after Reset";
+				params->failed = true;
+				return false;
+			}
+		}
+*/
+	}
+
+	s = ns
+	if DebugDFA {
+		// fprintf(stderr, "@_: %s\n", DumpState(s).c_str());
+	}
+	if s == fullMatchState {
+		params.ep = ep
+		return true
+	}
+	if !isSpecialState(s) && s.isMatch {
+/*
+		matched = true;
+		lastmatch = p;
+		if (params->matches && kind_ == Prog::kManyMatch) {
+			vector<int>* v = params->matches;
+			v->clear();
+			for (int i = 0; i < s->ninst_; i++) {
+				Prog::Inst* ip = prog_->inst(s->inst_[i]);
+				if (ip->opcode() == kInstMatch)
+					v->push_back(ip->match_id());
+			}
+		}
+		if (DebugDFA)
+			fprintf(stderr, "match @%d! [%s]\n", static_cast<int>(lastmatch - bp), DumpState(s).c_str());
+*/
+	}
+	params.ep = lastMatch
+	return matched
 }
 
 // Inline specializations of the general loop.
