@@ -278,6 +278,15 @@ type input interface {
 	context(pos int) syntax.EmptyOp
 }
 
+type rinput interface {
+	step(pos int) (r rune, width int) // advance one rune
+	rstep(pos int) (r rune, width int) // advance one rune in reverse TODO(matloob): CLEANME
+	canCheckPrefix() bool             // can we look ahead without losing info?
+	hasPrefix(re *Regexp) bool
+	index(re *Regexp, pos int) int
+	context(pos int) syntax.EmptyOp
+}
+
 // inputString scans a string.
 type inputString struct {
 	str string
@@ -292,6 +301,18 @@ func (i *inputString) step(pos int) (rune, int) {
 		return utf8.DecodeRuneInString(i.str[pos:])
 	}
 	return endOfText, 0
+}
+
+func (i *inputString) rstep(pos int) (rune, int) {
+	if pos > 0 {
+		print(pos)
+		c := i.str[pos - 1]
+		if c < utf8.RuneSelf {
+			return rune(c), 1
+		}
+		return utf8.DecodeLastRuneInString(i.str[:pos]) // This doesn't include pos char?
+	}
+	return endOfText, 0 // startOfText?
 }
 
 func (i *inputString) canCheckPrefix() bool {

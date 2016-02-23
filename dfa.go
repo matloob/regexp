@@ -1,4 +1,4 @@
-// Copyright 2015 The Go Authors. All rights reserved.
+// Copyright 2016 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -35,6 +35,10 @@ type State struct {
 
 	// Outgoing arrows from State, one per input byte class.
 	next []*State
+}
+
+func (s *State) isMatch() bool {
+	return s.flag & flagMatch != 0
 }
 
 func dumpState(state *State) string {
@@ -244,6 +248,7 @@ func (q *workq) elements() []int { // should be []stateInst. Should we convert s
 
 type searchParams struct {
 	input input // StringPiece
+	rinput rinput
 	startpos int
 	// text StringPiece
 	// context StringPiece
@@ -255,6 +260,8 @@ type searchParams struct {
 	cacheLock         sync.Locker
 	failed            bool // "out" parameter: whether search gave up
 	ep                int  // "out" parameter: end pointer for match
+
+	matches []int
 }
 
 // -----------------------------------------------------------------------------
@@ -376,81 +383,42 @@ func (d *DFA) search(i input, startpos int, reversed *DFA) (int, int, bool) {
 	// params.wantEarliestMatch = true
 	params.input = i
 	params.runForward = true
+	params.ep = 500
 	if !d.analyzeSearch(&params) {
 		return -1, -1, false
 	}
-	rev := make([]rune, 0, 1000) // XXX this is bad bad
-	rev = append(rev, endOfText)
-	state := params.start
-	pos := params.startpos
-	lastMatch := -1
-	var lastMatchState *State
-	var revLength int
-	for r, w := i.step(pos); ; r, w = i.step(pos) {
-		rev = append(rev, r)
-		//		state = d.runStateOnByte(state, int(r))
-		state = state.next[d.byteMap(int(r))]
-		if state == nil {
-			break
-		}
-		if state == deadState {
-			break;
-			return -1, -1, false
-		}
-		if state.flag&flagMatch != 0 {
-			lastMatch = pos
-			lastMatchState = state
-			revLength = len(rev)
-		}
-		if r == endOfText {
-			break
-		}
-		pos += w
-	}
-	if lastMatchState == nil {
+	b := d.slowSearchLoop(&params)
+	if !b {
+		fmt.Println("failed")
 		return -1, -1, false
 	}
-	pos = lastMatch
-	state = lastMatchState
-//revloop: // XXX bad bad bad bad bad
+	if is, ok := i.(*inputString); ok {
+		params.rinput = is
+	} else {
+		panic ("can't reverse input")
+	}
+	end := params.ep
+
 	params = searchParams{}
-	params.runForward = true
-	params.startpos = pos -1
-	params.input = i
+	params.startpos = startpos
+	params.ep = end
 	params.anchored = true
-	if reversed == nil || !reversed.analyzeSearch(&params) {
-		return -1, -1, false
+	// params.wantEarliestMatch = true
+	params.input = i
+	if is, ok := i.(*inputString); ok {
+		params.rinput = is
+	} else {
+		panic ("can't reverse input")
 	}
-	state = params.start
-	if state.flag & flagMatch != 0 {
-		return pos, pos, true
+	params.runForward = false
+	if !reversed.analyzeSearch(&params) {
+		return -2, -2, false
 	}
-	rev = rev[:revLength]
-	lastMatchStart := 0
-	for p := len(rev) -2; p >= 0; p-- {
-		r := rev[p]
-	//	fmt.Println("r: ", string(r))
-		state = state.next[reversed.byteMap(int(r))]
-	//	fmt.Println(state.Dump())
-		if state.flag&flagMatch != 0 {
-			// we found the start! hooray!
-			// This only works because we only accept chars < 255!
-			lastMatchStart = pos-(len(rev)-2-p)
-			// return pos-(len(rev) - 2-p), pos, true
-		}
-		if  state == deadState { return lastMatchStart, pos, true }
-		if r == endOfText {
-			break
-			panic("end of text")
- 		}
-		if state == nil { panic("nil state") }
-	}
-
-	return lastMatchStart, pos, true
-
-	return -1, -1, false
+	b = reversed.slowSearchLoop(&params)
+	fmt.Println()
+	fmt.Println("ep: " , params.ep)
+	return params.ep, end, b
 }
-
 
 // BuildAllStates
 func (d *DFA) BuildAllStates() int {
@@ -503,7 +471,7 @@ func (d *DFA) analyzeSearch(params *searchParams) bool {
 		// can we access the context from
 	} else {
 		// TODO(matloob) set flags properly !!!
-		flags = flag(input.context(params.startpos))
+		flags = flag(input.context(params.ep))
 //		fmt.Println("flags:", flags)
 		// flags = flag(input.context(params.startpos))
 		_ = input
@@ -1162,25 +1130,23 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 	start := params.start
 	bp := 0 // start of text
 	p := 0  // text scanning point
-	ep := 0 // end of text
+	ep := params.ep
 	if !runForward {
-		p, ep = ep, p
-	}
+		fmt.Println("not run forward", p, ep, start)
+		p, ep = ep, p 
+	} 
 
 	// const uint8* byte
 
 	_, _, _, _ = start, bp, p, ep
 
-	panic("inlined search loop not implemented")
-	return false
-
 	// const uint8* bytemap = prog_->bytemap()
-	var lastMatch int  // most recent matching position in text
+	var lastMatch int = -1 // most recent matching position in text
 	matched := false
 	s := start
 
-	if s.IsMatch() {
-		match = true
+	if s.isMatch() {
+		matched = true
 		lastMatch = p
 		if wantEarliestMatch {
 			params.ep = lastMatch
@@ -1188,9 +1154,11 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 		}
 	}
 
-	while p != ep {
+	var w int
+	for p != ep {
+		fmt.Println(".")
 		if DebugDFA {
-			fmt.Fprintf(os.Stderr, "@%d: %s\n", p - bp, s.dumpState())
+			fmt.Fprintf(os.Stderr, "@%d: %s\n", p - bp, s.Dump())
 		}
 		if haveFirstbyte && s == start {
 			// TODO(matloob): Correct the comment
@@ -1199,14 +1167,14 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 			// If firstbyte isn't found, we can skip to the end
 			// of the string.
 			if runForward {
-				p = input.index(p, regexp)
+				p = params.input.index(d.regexp, p)
 				if p < 0 {
 					p = ep
 					break
 				}
 			} else {
 				panic(" not handled... reverse index !" )
-				p = input.rindex(ep, regexp)
+				// p = params.input.rindex(d.regexp, ep)
 				if p < 0 {
 					p = ep
 					break
@@ -1217,113 +1185,129 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 
 		var c int
 		if runForward {
-			c = p
-			p = input.next(p)
+			var r rune
+			r, w = params.input.step(p)
+			fmt.Println("? ", r)
+			c = int(r)
+			p += w
 		} else {
-			panic("not implemented")
-			p-- // go to previous rune!
-			c = p
+			var r rune
+			r, w = params.rinput.rstep(p)
+			fmt.Println("> ", r, w)
+			c = int(r)
+			p -= w
 		}
-	}
-
-	// Note that multiple threads might be consulting
-	// s->next_[bytemap[c]] simultaneously.
-	// RunStateOnByte takes care of the appropriate locking,
-	// including a memory barrier so that the unlocked access
-	// (sometimes known as "double-checked locking") is safe.
-	// The alternative would be either one DFA per thread
-	// or one mutex operation per input byte.
-	//
-	// ns == DeadState means the state is known to be dead
-	// (no more matches are possible).
-	// ns == NULL means the state has not yet been computed
-	// (need to call RunStateOnByteUnlocked).
-	// RunStateOnByte returns ns == NULL if it is out of memory.
-	// ns == FullMatchState means the rest of the string matches.
-	//
-	// Okay to use bytemap[] not ByteMap() here, because
-	// c is known to be an actual byte and not kByteEndText.
-	var ns *State
-	// ATOMIC_LOAD_CONSUME(ns, &s->next_[bytemap[c]]);
-	ns = s.next[d.bytemap(c)]
-	if ns == nil {
-		/*
-		ns = RunStateOnByteUnlocked(s, c);
-		if (ns == NULL) {
-		  // After we reset the cache, we hold cache_mutex exclusively,
-		  // so if resetp != NULL, it means we filled the DFA state
-		  // cache with this search alone (without any other threads).
-		  // Benchmarks show that doing a state computation on every
-		  // byte runs at about 0.2 MB/s, while the NFA (nfa.cc) can do the
-		  // same at about 2 MB/s.  Unless we're processing an average
-		  // of 10 bytes per state computation, fail so that RE2 can
-		  // fall back to the NFA.
-		  if (FLAGS_re2_dfa_bail_when_slow && resetp != NULL &&
-		      (p - resetp) < 10*state_cache_.size()) {
-		    params->failed = true;
-		    return false;
-		  }
-		  resetp = p;
-
-		  // Prepare to save start and s across the reset.
-		  StateSaver save_start(this, start);
-		  StateSaver save_s(this, s);
-
-		  // Discard all the States in the cache.
-		  ResetCache(params->cache_lock);
-
-		  // Restore start and s so we can continue.
-		  if ((start = save_start.Restore()) == NULL ||
-		      (s = save_s.Restore()) == NULL) {
-		    // Restore already did LOG(DFATAL).
-		    params->failed = true;
-		    return false;
-		  }
-		  ns = RunStateOnByteUnlocked(s, c);
-		  if (ns == NULL) {
-		    LOG(DFATAL) << "RunStateOnByteUnlocked failed after ResetCache";
-		    params->failed = true;
-		    return false;
-		  }
+		if c == int(endOfText) { // TODO(matloob): end of text
+			break
 		}
-		*/
 
-	}
-
-	//  if (ns <= SpecialStateMax) {
-	if isSpecialState(ns) {
-		if ns == deadState {
-			params.ep = lastMatch
-			return matched
+		// Note that multiple threads might be consulting
+		// s->next_[bytemap[c]] simultaneously.
+		// RunStateOnByte takes care of the appropriate locking,
+		// including a memory barrier so that the unlocked access
+		// (sometimes known as "double-checked locking") is safe.
+		// The alternative would be either one DFA per thread
+		// or one mutex operation per input byte.
+		//
+		// ns == DeadState means the state is known to be dead
+		// (no more matches are possible).
+		// ns == NULL means the state has not yet been computed
+		// (need to call RunStateOnByteUnlocked).
+		// RunStateOnByte returns ns == NULL if it is out of memory.
+		// ns == FullMatchState means the rest of the string matches.
+		//
+		// Okay to use bytemap[] not ByteMap() here, because
+		// c is known to be an actual byte and not kByteEndText.
+		var ns *State
+		fmt.Println("next", len(s.next))
+		// ATOMIC_LOAD_CONSUME(ns, &s->next_[bytemap[c]]);
+		ns = s.next[d.byteMap(c)]
+		if ns == nil {
+			ns = d.runStateOnByteUnlocked(s, c)
+			if ns == nil {
+				panic("state saving stuff not implemented")
+			}
+			/*
+				ns = RunStateOnByteUnlocked(s, c);
+				if (ns == NULL) {
+				  // After we reset the cache, we hold cache_mutex exclusively,
+				  // so if resetp != NULL, it means we filled the DFA state
+				  // cache with this search alone (without any other threads).
+				  // Benchmarks show that doing a state computation on every
+				  // byte runs at about 0.2 MB/s, while the NFA (nfa.cc) can do the
+				  // same at about 2 MB/s.  Unless we're processing an average
+				  // of 10 bytes per state computation, fail so that RE2 can
+				  // fall back to the NFA.
+				  if (FLAGS_re2_dfa_bail_when_slow && resetp != NULL &&
+				      (p - resetp) < 10*state_cache_.size()) {
+				    params->failed = true;
+				    return false;
+				  }
+				  resetp = p;
+		
+				  // Prepare to save start and s across the reset.
+				  StateSaver save_start(this, start);
+				  StateSaver save_s(this, s);
+		
+				  // Discard all the States in the cache.
+				  ResetCache(params->cache_lock);
+		
+				  // Restore start and s so we can continue.
+				  if ((start = save_start.Restore()) == NULL ||
+				      (s = save_s.Restore()) == NULL) {
+				    // Restore already did LOG(DFATAL).
+				    params->failed = true;
+				    return false;
+				  }
+				  ns = RunStateOnByteUnlocked(s, c);
+				  if (ns == NULL) {
+				    LOG(DFATAL) << "RunStateOnByteUnlocked failed after ResetCache";
+				    params->failed = true;
+				    return false;
+				  }
+				}
+			*/
+	
 		}
-		params.ep = ep
-		return true
-	}
-	s = ns
-
-	if s.isMatch() {
-		matched = true
-		// The DFA notices the match one rune late,
-		// so adjust p before using it in the match.
-		if runForward{
-			panic("previous rune!")
-			lastMatch = p - 1;
-		} else {
-			lastMatch = input.next(p)
-		}
-		if DebugDFA {
-			fmt.Fprintf(os.Stderr, "match @%d! [%s]\n", lastMatch - bp, s.DumpState()
-		}
-		if wantEarliestMatch {
-			params.ep = lastMatch
+	
+		//  if (ns <= SpecialStateMax) {
+		if isSpecialState(ns) {
+			if ns == deadState {
+				fmt.Println("deadstate")
+				params.ep = lastMatch
+				return matched
+			}
+			params.ep = ep
 			return true
 		}
+		s = ns
+	
+		if s.isMatch() {
+			matched = true
+			// The DFA notices the match one rune late,
+			// so adjust p before using it in the match.
+			if runForward {
+				lastMatch = p - w
+			} else {
+				lastMatch = p + w
+			}
+			if DebugDFA {
+				fmt.Fprintf(os.Stderr, "match @%d! [%s]\n", lastMatch - bp, s.Dump())
+			}
+			if wantEarliestMatch {
+				params.ep = lastMatch
+				return true
+			}
+		}
+
 	}
 
 	// Process one more byte to see if it triggers a match.
 	// (Remember, matches are delayed one byte.)
-	var lastbyte int
+	var lastbyte int // TODO(matloob): not really a byte...
 	if runForward {
+		// TODO(matloob): fix
+		lastbyte = int(endOfText)
 		/*
 		if (params->text.end() == params->context.end())
 	  		lastbyte = kByteEndText;
@@ -1331,6 +1315,8 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 	  		lastbyte = params->text.end()[0] & 0xFF;
 		*/
 	} else {
+		fmt.Println("Y")
+		lastbyte = int(endOfText)
 		/*
 		if (params->text.begin() == params->context.begin())
 			lastbyte = kByteEndText;
@@ -1339,9 +1325,18 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 		*/
 	}
 
+
+//	fmt.Println(s.Dump())
+//	fmt.Println(s.next)
 	var ns *State
 	// ATOMIC_LOAD_CONSUME(ns, &s->next_[ByteMap(lastbyte)]);
+	// TODO(matloob): ATOMIC
+	ns = s.next[d.byteMap(lastbyte)]
 	if ns != nil {
+		ns = d.runStateOnByteUnlocked(s, lastbyte)
+		if ns == nil {
+			panic("state saver stuff NOT implemented")
+		}
 /*
 		ns = RunStateOnByteUnlocked(s, lastbyte);
 		if (ns == NULL) {
@@ -1366,25 +1361,29 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 		// fprintf(stderr, "@_: %s\n", DumpState(s).c_str());
 	}
 	if s == fullMatchState {
+		fmt.Println("fullmatch")
 		params.ep = ep
 		return true
 	}
-	if !isSpecialState(s) && s.isMatch {
-/*
-		matched = true;
-		lastmatch = p;
-		if (params->matches && kind_ == Prog::kManyMatch) {
-			vector<int>* v = params->matches;
-			v->clear();
-			for (int i = 0; i < s->ninst_; i++) {
-				Prog::Inst* ip = prog_->inst(s->inst_[i]);
-				if (ip->opcode() == kInstMatch)
-					v->push_back(ip->match_id());
+	if !isSpecialState(s) && s.isMatch() {
+		fmt.Println("match")
+		matched = true
+		lastMatch = p
+		// TODO(matloob): Just remove this? Do we support ManyMatch?
+		if params.matches != nil && false /* && d.kind == ManyMatch */ {
+			v := params.matches
+			v = v[:0] // TODO(matloob): just operate on params.matches?
+			for i := range s.inst {
+				inst := d.prog.Inst[s.inst[i]]
+				if inst.Op == syntax.InstMatch {
+					v = append(v, 0 /* inst.matchID() */ ) // TODO(matloob): match id?
+				}
 			}
+			params.matches = v
 		}
-		if (DebugDFA)
-			fprintf(stderr, "match @%d! [%s]\n", static_cast<int>(lastmatch - bp), DumpState(s).c_str());
-*/
+		if DebugDFA {
+		//	fprintf(stderr, "match @%d! [%s]\n", static_cast<int>(lastmatch - bp), DumpState(s).c_str());
+		}
 	}
 	params.ep = lastMatch
 	return matched

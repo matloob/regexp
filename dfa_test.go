@@ -6,6 +6,8 @@ import (
 	"testing"
 )
 
+
+
 func matchDFA(regexp string, input string) (int, int, bool, error) {
 	re, err := syntax.Parse(regexp, syntax.Flags(0))
 	if err != nil {
@@ -35,7 +37,6 @@ func matchDFA(regexp string, input string) (int, int, bool, error) {
 }
 
 func TestDFA(t *testing.T) {
-
 	// These are all anchored matches.
 	testCases := []struct {
 		re   string
@@ -61,10 +62,9 @@ func TestDFA(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		if got != tc.want || i != tc.wantS || j != tc.wantE{
+		if got != tc.want || i != tc.wantS  || j != tc.wantE {
 			t.Errorf("matchDFA(%q, %q): got (%v, %v, %v), want (%v, %v, %v)", tc.re, tc.in, i, j, got, tc.wantS, tc.wantE, tc.want)
 		}
 	}
-
 
 }
