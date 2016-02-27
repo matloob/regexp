@@ -389,13 +389,8 @@ func (d *DFA) search(i input, startpos int, reversed *DFA) (int, int, bool) {
 	}
 	b := d.slowSearchLoop(&params)
 	if !b {
-		fmt.Println("failed")
+//		fmt.Println("failed")
 		return -1, -1, false
-	}
-	if is, ok := i.(*inputString); ok {
-		params.rinput = is
-	} else {
-		panic ("can't reverse input")
 	}
 	end := params.ep
 
@@ -405,18 +400,14 @@ func (d *DFA) search(i input, startpos int, reversed *DFA) (int, int, bool) {
 	params.anchored = true
 	// params.wantEarliestMatch = true
 	params.input = i
-	if is, ok := i.(*inputString); ok {
-		params.rinput = is
-	} else {
-		panic ("can't reverse input")
-	}
+	params.rinput= reverse(i)
 	params.runForward = false
 	if !reversed.analyzeSearch(&params) {
 		return -2, -2, false
 	}
 	b = reversed.slowSearchLoop(&params)
-	fmt.Println()
-	fmt.Println("ep: " , params.ep)
+//	fmt.Println()
+//	fmt.Println("ep: " , params.ep)
 	return params.ep, end, b
 }
 
@@ -578,6 +569,8 @@ func (d *DFA) runStateOnByteUnlocked(state *State, c int) *State {
 	return d.runStateOnByte(state, c)
 }
 
+
+
 // Looks up bytes in d.bytemap but handles case c == kByteEndText too.
 func (d *DFA) byteMap(c int) int {
 	// Use the trivial byte map for now...
@@ -599,6 +592,54 @@ func (d *DFA) byteMap(c int) int {
 		return 0
 	*/
 }
+
+/*
+
+void Prog::MarkByteRange(int lo, int hi) {
+  DCHECK_GE(lo, 0);
+  DCHECK_GE(hi, 0);
+  DCHECK_LE(lo, 255);
+  DCHECK_LE(hi, 255);
+  DCHECK_LE(lo, hi);
+  if (0 < lo && lo <= 255)
+    byterange_.Set(lo - 1);
+  if (0 <= hi && hi <= 255)
+    byterange_.Set(hi);
+}
+
+void Prog::ComputeByteMap() {
+  // Fill in bytemap with byte classes for prog_.
+  // Ranges of bytes that are treated as indistinguishable
+  // by the regexp program are mapped to a single byte class.
+  // The vector prog_->byterange() marks the end of each
+  // such range.
+  const Bitmap<256>& v = byterange();
+
+  COMPILE_ASSERT(8*sizeof(v.Word(0)) == 32, wordsize);
+  uint8 n = 0;
+  uint32 bits = 0;
+  for (int i = 0; i < 256; i++) {
+    if ((i&31) == 0)
+      bits = v.Word(i >> 5);
+    bytemap_[i] = n;
+    n += bits & 1;
+    bits >>= 1;
+  }
+  bytemap_range_ = bytemap_[255] + 1;
+  unbytemap_ = new uint8[bytemap_range_];
+  for (int i = 0; i < 256; i++)
+    unbytemap_[bytemap_[i]] = static_cast<uint8>(i);
+
+  if (0) {  // For debugging: use trivial byte map.
+    for (int i = 0; i < 256; i++) {
+      bytemap_[i] = static_cast<uint8>(i);
+      unbytemap_[i] = static_cast<uint8>(i);
+    }
+    bytemap_range_ = 256;
+    LOG(INFO) << "Using trivial bytemap.";
+  }
+}
+*/
 
 func (d *DFA) computeByteMap() {
 	//	var divides map[int]bool
@@ -1132,7 +1173,7 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 	p := 0  // text scanning point
 	ep := params.ep
 	if !runForward {
-		fmt.Println("not run forward", p, ep, start)
+//		fmt.Println("not run forward", p, ep, start)
 		p, ep = ep, p 
 	} 
 
@@ -1156,7 +1197,7 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 
 	var w int
 	for p != ep {
-		fmt.Println(".")
+//		fmt.Println(".")
 		if DebugDFA {
 			fmt.Fprintf(os.Stderr, "@%d: %s\n", p - bp, s.Dump())
 		}
@@ -1187,13 +1228,13 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 		if runForward {
 			var r rune
 			r, w = params.input.step(p)
-			fmt.Println("? ", r)
+//			fmt.Println("? ", r)
 			c = int(r)
 			p += w
 		} else {
 			var r rune
 			r, w = params.rinput.rstep(p)
-			fmt.Println("> ", r, w)
+//			fmt.Println("> ", r, w)
 			c = int(r)
 			p -= w
 		}
@@ -1219,7 +1260,7 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 		// Okay to use bytemap[] not ByteMap() here, because
 		// c is known to be an actual byte and not kByteEndText.
 		var ns *State
-		fmt.Println("next", len(s.next))
+//		fmt.Println("next", len(s.next))
 		// ATOMIC_LOAD_CONSUME(ns, &s->next_[bytemap[c]]);
 		ns = s.next[d.byteMap(c)]
 		if ns == nil {
@@ -1273,7 +1314,7 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 		//  if (ns <= SpecialStateMax) {
 		if isSpecialState(ns) {
 			if ns == deadState {
-				fmt.Println("deadstate")
+//				fmt.Println("deadstate")
 				params.ep = lastMatch
 				return matched
 			}
@@ -1315,7 +1356,6 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 	  		lastbyte = params->text.end()[0] & 0xFF;
 		*/
 	} else {
-		fmt.Println("Y")
 		lastbyte = int(endOfText)
 		/*
 		if (params->text.begin() == params->context.begin())
@@ -1361,12 +1401,12 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 		// fprintf(stderr, "@_: %s\n", DumpState(s).c_str());
 	}
 	if s == fullMatchState {
-		fmt.Println("fullmatch")
+//		fmt.Println("fullmatch")
 		params.ep = ep
 		return true
 	}
 	if !isSpecialState(s) && s.isMatch() {
-		fmt.Println("match")
+//		fmt.Println("match")
 		matched = true
 		lastMatch = p
 		// TODO(matloob): Just remove this? Do we support ManyMatch?

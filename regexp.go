@@ -287,6 +287,13 @@ type rinput interface {
 	context(pos int) syntax.EmptyOp
 }
 
+func reverse(i input) rinput {
+	if ri, ok := i.(rinput); ok {
+		return ri
+	}
+	return nil
+}
+
 // inputString scans a string.
 type inputString struct {
 	str string
@@ -352,6 +359,19 @@ func (i *inputBytes) step(pos int) (rune, int) {
 		return utf8.DecodeRune(i.str[pos:])
 	}
 	return endOfText, 0
+}
+
+
+func (i *inputBytes) rstep(pos int) (rune, int) {
+	if pos > 0 {
+		print(pos)
+		c := i.str[pos - 1]
+		if c < utf8.RuneSelf {
+			return rune(c), 1
+		}
+		return utf8.DecodeLastRune(i.str[:pos]) // This doesn't include pos char?
+	}
+	return endOfText, 0 // startOfText?
 }
 
 func (i *inputBytes) canCheckPrefix() bool {

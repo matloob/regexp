@@ -444,16 +444,23 @@ func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap i
 			re.put(m)
 			return nil
 		}
-	} else if size < m.maxBitStateLen && r == nil {
+/*	} else if size < m.maxBitStateLen && r == nil {
 		if m.b == nil {
 			m.b = newBitState(m.p)
 		}
 		if !m.backtrack(i, pos, size, ncap) {
 			re.put(m)
 			return nil
-		}
+		}*/
 	} else {
+		_ = size
 		if ncap <= 2 {
+			fmt.Print("z")
+			if reverse(i) == nil {
+				fmt.Println("NFA")
+				goto nfa
+			}
+			fmt.Println("DFA")
 			if DebugDFA {
 				fmt.Println("using dfa matcher")
 			}
@@ -487,6 +494,7 @@ func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap i
 			}
 			goto e
 		}
+		nfa:
 		m.init(ncap)
 		if !m.match(i, pos) {
 			re.put(m)
