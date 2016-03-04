@@ -56,7 +56,9 @@ func TestDFA(t *testing.T) {
 
 		{"(>[^\n]+)?\n", ">One Homo sapiens alu\nGGCCGGGCGCG", 0, 22, true},
 		{"abc","abcxxxabc", 0,3,true},
-		{"^", "abcde", 0, 0, true },
+//		{"^", "abcde", 0, 0, true },
+		{"agggtaa[cgt]|[acg]ttaccct", "agggtaag", 0, 8, true},
+		{"[cgt]gggtaaa|tttaccc[acg]", "xtttacccce", 1, 9, true},
 	}
 	for _, tc := range testCases {
 		i, j, got, err := matchDFA(tc.re, tc.in)

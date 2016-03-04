@@ -440,6 +440,7 @@ func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap i
 		size = len(s)
 	}
 	if m.op != notOnePass {
+		fmt.Println("onepass")
 		if !m.onepass(i, pos) {
 			re.put(m)
 			return nil
@@ -455,18 +456,16 @@ func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap i
 	} else {
 		_ = size
 		if ncap <= 2 {
-			fmt.Print("z")
 			if reverse(i) == nil {
 				fmt.Println("NFA")
 				goto nfa
 			}
-			fmt.Println("DFA")
 			if DebugDFA {
 				fmt.Println("using dfa matcher")
 			}
 			if m.dfa == nil {
 				m.dfa = newDFA(re.prog, longestMatch, 10000)
-				m.dfa.BuildAllStates()
+//				m.dfa.BuildAllStates()
 			}
 			if m.revdfa == nil {
 				// XXX find me a good home
@@ -480,16 +479,19 @@ func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap i
 				if err != nil {
 					panic("CompileReversed failed")
 				}
+
 				m.revdfa = newDFA(revprog, longestMatch, 50000)
-				m.revdfa.BuildAllStates()
+//				m.revdfa.BuildAllStates()
 			}
 			var matched bool
 			m.matchcap = m.matchcap[:ncap]
 			i, j, matched := m.dfa.search(i, pos, m.revdfa)
+//							fmt.Printf("pos: %v\nre: %v\nb: %v\ns: %v\ni: %v=n j: %v\nmatched: %v\n", pos, re, string(b), s, i, j, matched)
 			if ncap > 0 {
 				m.matchcap[0], m.matchcap[1] = i, j
 			}
 			if !matched {
+//				fmt.Println(re, "not matched", i, j)
 				return nil
 			}
 			goto e

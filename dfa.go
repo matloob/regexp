@@ -9,6 +9,7 @@ package regexp
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"log"
 	"matloob.io/regexp/syntax"
 	"os"
@@ -66,8 +67,8 @@ const (
 	// Add startAnchored for anchored searches.
 	startBeginText        = 0
 	startBeginLine        = 2
-	startAfterWordChar    = 4
-	startAfterNonWordChar = 6
+	startWordBoundary    = 4
+	startNonWordBoundary = 6
 	maxStart              = 8
 
 	kStartAnchored = 1
@@ -380,16 +381,16 @@ func newDFA(prog *syntax.Prog, kind matchKind, maxMem int64) *DFA {
 func (d *DFA) search(i input, startpos int, reversed *DFA) (int, int, bool) {
 	params := searchParams{}
 	params.startpos = startpos
-	// params.wantEarliestMatch = true
+	params.wantEarliestMatch = true
 	params.input = i
 	params.runForward = true
-	params.ep = 500
+	params.ep = int(math.MaxInt64)
 	if !d.analyzeSearch(&params) {
+		panic("analyzesearch failed")
 		return -1, -1, false
 	}
 	b := d.slowSearchLoop(&params)
 	if !b {
-//		fmt.Println("failed")
 		return -1, -1, false
 	}
 	end := params.ep
@@ -406,8 +407,6 @@ func (d *DFA) search(i input, startpos int, reversed *DFA) (int, int, bool) {
 		return -2, -2, false
 	}
 	b = reversed.slowSearchLoop(&params)
-//	fmt.Println()
-//	fmt.Println("ep: " , params.ep)
 	return params.ep, end, b
 }
 
@@ -458,17 +457,21 @@ func (d *DFA) analyzeSearch(params *searchParams) bool {
 	var start int
 	var flags flag
 	if params.runForward {
-		flags = 0 // input.context(params.startpos) // are we starting from the beginning?
-		// can we access the context from
+		flags =  flag(input.context(params.startpos))
 	} else {
-		// TODO(matloob) set flags properly !!!
 		flags = flag(input.context(params.ep))
-//		fmt.Println("flags:", flags)
-		// flags = flag(input.context(params.startpos))
-		_ = input
+	}
+	if flags & flag(syntax.EmptyBeginText) != 0{
+		start |= startBeginText
+	} else if flags & flag(syntax.EmptyBeginLine) != 0 {
+		start |= startBeginLine
+	} else if flags & flag(syntax.EmptyWordBoundary) != 0 {
+		start |= startWordBoundary
+	} else {
+		start |= startNonWordBoundary
 	}
 	if params.anchored /* || prog.anchorStart() */ {
-		// start |= kStartAnchored
+		start |= kStartAnchored
 	}
 	info := d.start[start]
 
@@ -510,11 +513,11 @@ func (d *DFA) analyzeSearchHelper(params *searchParams, info *startInfo, flags f
 	}
 
 	d.q0.clear()
-	start := d.prog.Start
+	s := d.prog.Start
 	if !params.anchored {
-		start = d.startUnanchored
+		s = d.startUnanchored
 	}
-	d.addToQueue(d.q0, start, flags)
+	d.addToQueue(d.q0, s, flags)
 	info.start = d.workqToCachedState(d.q0, flags)
 	if info.start == nil {
 		log.Print("workq to cached state returned nil!")
@@ -1170,7 +1173,7 @@ func dumpWorkq(q *workq) string {
 func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarliestMatch, runForward bool) bool {
 	start := params.start
 	bp := 0 // start of text
-	p := 0  // text scanning point
+	p := params.startpos  // text scanning point
 	ep := params.ep
 	if !runForward {
 //		fmt.Println("not run forward", p, ep, start)
@@ -1186,7 +1189,7 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 	matched := false
 	s := start
 
-	if s.isMatch() {
+	if s.isMatch() { 
 		matched = true
 		lastMatch = p
 		if wantEarliestMatch {

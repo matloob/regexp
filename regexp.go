@@ -312,7 +312,7 @@ func (i *inputString) step(pos int) (rune, int) {
 
 func (i *inputString) rstep(pos int) (rune, int) {
 	if pos > 0 {
-		print(pos)
+//		print(pos)
 		c := i.str[pos - 1]
 		if c < utf8.RuneSelf {
 			return rune(c), 1
@@ -364,7 +364,7 @@ func (i *inputBytes) step(pos int) (rune, int) {
 
 func (i *inputBytes) rstep(pos int) (rune, int) {
 	if pos > 0 {
-		print(pos)
+//		print(pos)
 		c := i.str[pos - 1]
 		if c < utf8.RuneSelf {
 			return rune(c), 1
