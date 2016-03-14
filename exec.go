@@ -440,7 +440,7 @@ func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap i
 		size = len(s)
 	}
 	if m.op != notOnePass {
-		fmt.Println("onepass")
+//		fmt.Println("onepass")
 		if !m.onepass(i, pos) {
 			re.put(m)
 			return nil
@@ -457,7 +457,7 @@ func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap i
 		_ = size
 		if ncap <= 2 {
 			if reverse(i) == nil {
-				fmt.Println("NFA")
+	//			fmt.Println("NFA")
 				goto nfa
 			}
 			if DebugDFA {
@@ -465,7 +465,6 @@ func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap i
 			}
 			if m.dfa == nil {
 				m.dfa = newDFA(re.prog, longestMatch, 10000)
-//				m.dfa.BuildAllStates()
 			}
 			if m.revdfa == nil {
 				// XXX find me a good home
@@ -480,8 +479,7 @@ func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap i
 					panic("CompileReversed failed")
 				}
 
-				m.revdfa = newDFA(revprog, longestMatch, 50000)
-//				m.revdfa.BuildAllStates()
+				m.revdfa = newReverseDFA(revprog, longestMatch, 50000)
 			}
 			var matched bool
 			m.matchcap = m.matchcap[:ncap]

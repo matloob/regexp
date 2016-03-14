@@ -267,6 +267,7 @@ func (re *Regexp) SubexpNames() []string {
 }
 
 const endOfText rune = -1
+const startOfText rune = -2
 
 // input abstracts different representations of the input text. It provides
 // one-character lookahead.
@@ -300,6 +301,9 @@ type inputString struct {
 }
 
 func (i *inputString) step(pos int) (rune, int) {
+	if pos < 0 {
+		return startOfText, 0
+	}
 	if pos < len(i.str) {
 		c := i.str[pos]
 		if c < utf8.RuneSelf {
@@ -311,7 +315,10 @@ func (i *inputString) step(pos int) (rune, int) {
 }
 
 func (i *inputString) rstep(pos int) (rune, int) {
-	if pos > 0 {
+	if pos > len(i.str) {
+		return startOfText, 0
+	}
+	if pos >= 0 {
 //		print(pos)
 		c := i.str[pos - 1]
 		if c < utf8.RuneSelf {
@@ -319,7 +326,7 @@ func (i *inputString) rstep(pos int) (rune, int) {
 		}
 		return utf8.DecodeLastRuneInString(i.str[:pos]) // This doesn't include pos char?
 	}
-	return endOfText, 0 // startOfText?
+	return endOfText, 0
 }
 
 func (i *inputString) canCheckPrefix() bool {
@@ -351,6 +358,9 @@ type inputBytes struct {
 }
 
 func (i *inputBytes) step(pos int) (rune, int) {
+	if pos < 0 {
+		return startOfText, 0
+	}
 	if pos < len(i.str) {
 		c := i.str[pos]
 		if c < utf8.RuneSelf {
@@ -363,7 +373,10 @@ func (i *inputBytes) step(pos int) (rune, int) {
 
 
 func (i *inputBytes) rstep(pos int) (rune, int) {
-	if pos > 0 {
+	if pos > len(i.str) {
+		return startOfText, 0
+	}
+	if pos >= 0 {
 //		print(pos)
 		c := i.str[pos - 1]
 		if c < utf8.RuneSelf {

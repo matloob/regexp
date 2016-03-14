@@ -46,7 +46,7 @@ func dumpState(state *State) string {
 	return state.Dump()
 }
 
-type flag uint16
+type flag uint32
 
 var (
 	flagEmptyMask = flag(0xFFF)
@@ -335,14 +335,20 @@ type DFA struct {
 	cacheMu     sync.Mutex
 	memBudget   int64
 	stateBudget int64 // is this used?
-	bytemap     map[byte]uint8
+	bytemap     []int
 	stateCache  stateSet
 	start       [maxStart]startInfo // should this be a slice?
+	
+	
+	// TODO(matloob): removeme
+	reverse bool // is this a reverse DFA?
+	divides []int
 }
 
 func newDFA(prog *syntax.Prog, kind matchKind, maxMem int64) *DFA {
 	d := new(DFA)
 	d.prog = prog
+	d.computeByteMap()
 	d.kind = kind
 	d.startUnanchored = 0
 	d.initFailed = false // remove initFailed!! TODO(matloob)
@@ -378,10 +384,16 @@ func newDFA(prog *syntax.Prog, kind matchKind, maxMem int64) *DFA {
 	return d
 }
 
+func newReverseDFA(prog *syntax.Prog, kind matchKind, maxMem int64) *DFA {
+	d := newDFA(prog, kind, maxMem)
+	d.reverse = true
+	return d
+}
+
 func (d *DFA) search(i input, startpos int, reversed *DFA) (int, int, bool) {
 	params := searchParams{}
 	params.startpos = startpos
-	params.wantEarliestMatch = true
+	params.wantEarliestMatch = false
 	params.input = i
 	params.runForward = true
 	params.ep = int(math.MaxInt64)
@@ -434,7 +446,7 @@ func (d *DFA) BuildAllStates() int {
 	// Flood to expand every state.
 	for i := 0; i < len(q); i++ {
 		s := q[i]
-		for c := 0; c < 257; c++ {
+		for c := 0; c < 256; c++ {
 			ns := d.runStateOnByteUnlocked(s, c)
 			if !isSpecialState(ns) && queued.find(ns) == nil {
 				queued.insert(ns)
@@ -459,8 +471,11 @@ func (d *DFA) analyzeSearch(params *searchParams) bool {
 	if params.runForward {
 		flags =  flag(input.context(params.startpos))
 	} else {
-		flags = flag(input.context(params.ep))
+		flags = flag(params.rinput.context(params.ep))
+		// reverse the flag -- do this a nicer way!
+		flags = flag(int(flags) & ^0xF) |((flags & 0xA) >> 1) | ((flags & 0x5) << 1)
 	}
+	
 	if flags & flag(syntax.EmptyBeginText) != 0{
 		start |= startBeginText
 	} else if flags & flag(syntax.EmptyBeginLine) != 0 {
@@ -579,73 +594,74 @@ func (d *DFA) byteMap(c int) int {
 	// Use the trivial byte map for now...
 	// See ComputeByteMap
 	if c == int(endOfText) {
-		return 256
+		return len(d.divides);
 	}
-	if c > 256 {
-		log.Panicf("runes with values above 256 are not supported!: %d", c)
+	if c == int(startOfText) {
+		return len(d.divides) + 1
 	}
-	return c
-	/*
-		return 0
-		if c == byteEndText {
-			return 0 // TODO(matloob): WRONG
+	if c > 255 {
+		lo, hi := 0, len(d.divides)
+		for {
+			// search d.divides
+			center := (lo+hi)/2
+			if center == lo {
+				return lo
+			}
+			divcenter := d.divides[center]
+			if c >= divcenter {
+				lo = center
+			} else {
+				hi = center
+			}
 		}
-		return int(d.bytemap[byte(c)])
-		panic("not implemented")
-		return 0
-	*/
+	}
+	return d.bytemap[c]
 }
-
-/*
-
-void Prog::MarkByteRange(int lo, int hi) {
-  DCHECK_GE(lo, 0);
-  DCHECK_GE(hi, 0);
-  DCHECK_LE(lo, 255);
-  DCHECK_LE(hi, 255);
-  DCHECK_LE(lo, hi);
-  if (0 < lo && lo <= 255)
-    byterange_.Set(lo - 1);
-  if (0 <= hi && hi <= 255)
-    byterange_.Set(hi);
-}
-
-void Prog::ComputeByteMap() {
-  // Fill in bytemap with byte classes for prog_.
-  // Ranges of bytes that are treated as indistinguishable
-  // by the regexp program are mapped to a single byte class.
-  // The vector prog_->byterange() marks the end of each
-  // such range.
-  const Bitmap<256>& v = byterange();
-
-  COMPILE_ASSERT(8*sizeof(v.Word(0)) == 32, wordsize);
-  uint8 n = 0;
-  uint32 bits = 0;
-  for (int i = 0; i < 256; i++) {
-    if ((i&31) == 0)
-      bits = v.Word(i >> 5);
-    bytemap_[i] = n;
-    n += bits & 1;
-    bits >>= 1;
-  }
-  bytemap_range_ = bytemap_[255] + 1;
-  unbytemap_ = new uint8[bytemap_range_];
-  for (int i = 0; i < 256; i++)
-    unbytemap_[bytemap_[i]] = static_cast<uint8>(i);
-
-  if (0) {  // For debugging: use trivial byte map.
-    for (int i = 0; i < 256; i++) {
-      bytemap_[i] = static_cast<uint8>(i);
-      unbytemap_[i] = static_cast<uint8>(i);
-    }
-    bytemap_range_ = 256;
-    LOG(INFO) << "Using trivial bytemap.";
-  }
-}
-*/
 
 func (d *DFA) computeByteMap() {
-	//	var divides map[int]bool
+	divides := make(map[rune]bool)
+	for _, inst := range d.prog.Inst {
+		switch inst.Op {
+		// Do we need something for the empty width tstuff?
+		case syntax.InstRune:
+			for i := 0; i < len(inst.Rune); i += 2 {
+				divides[inst.Rune[i]] = true
+				if i+1 < len(inst.Rune) {
+				divides[inst.Rune[i+1] + 1] = true
+				}
+			}
+		case syntax.InstRune1:
+			divides[inst.Rune[0]] = true
+			divides[inst.Rune[0] + 1]  = true
+		case syntax.InstRuneAnyNotNL: 
+			divides['\n'] = true
+			divides['\n'+1] = true
+		}
+
+	}
+	
+	divl := make([]int, 0,len(divides))
+	divl = append(divl, -1)
+	for i := range divides {
+		divl = append(divl, int(i))
+	}
+	sort.Ints(divl)
+	d.divides = divl
+	d.bytemap = make([]int, 256)
+	k := 0
+	for i := range d.bytemap {
+		if divides[rune(i)] {
+			k++
+		}
+		d.bytemap[i] = k
+	}
+/*	fmt.Println(d.bytemap)
+	
+	bytemap2 := make([]int, 256)
+	for i := range bytemap2 {
+		bytemap2[i] = d.byteMap(i)
+	}
+	fmt.Println(bytemap2)	*/
 }
 
 // Processes input byte c in state, returning new state.
@@ -677,7 +693,6 @@ func (d *DFA) runStateOnByte(state *State, c int) *State {
 	if ns != nil {
 		return ns
 	}
-
 	// Convert state to workq.
 	d.stateToWorkq(state, d.q0)
 
@@ -685,7 +700,16 @@ func (d *DFA) runStateOnByte(state *State, c int) *State {
 	// around this byte.  Before the byte we have the flags recorded
 	// in the State structure itself.  After the byte we have
 	// nothing yet (but that will change: read on).
-	var needflag, beforeflag, oldbeforeflag, afterflag flag
+//	var needflag, beforeflag, oldbeforeflag, afterflag flag
+	
+	// Flags marking the kinds of empty-width things (^ $ etc)
+	// around this byte.  Before the byte we have the flags recorded
+	// in the State structure itself.  After the byte we have
+	// nothing yet (but that will change: read on).
+	needflag := state.flag >> flagNeedShift 
+	beforeflag := state.flag & flagEmptyMask
+	oldbeforeflag := beforeflag
+	afterflag := flag(0)
 
 	if c == '\n' {
 		// Insert implicit $ and ^ around \n
@@ -693,10 +717,13 @@ func (d *DFA) runStateOnByte(state *State, c int) *State {
 		afterflag |= flag(syntax.EmptyBeginLine)
 	}
 
+
 	if c == int(endOfText) {
 		// Insert implicit $ and \z before the fake "end text" byte.
-		beforeflag |= flag(syntax.EmptyEndLine) | flag(syntax.EmptyEndText)
-	}
+			beforeflag |= flag(syntax.EmptyEndLine) | flag(syntax.EmptyEndText)
+		} else if c == int(startOfText) {
+			beforeflag |= flag(syntax.EmptyBeginLine) | flag(syntax.EmptyBeginText)	
+		}	
 
 	// The state flag kFlagLastWord says whether the last
 	// byte processed was a word character.  Use that info to
@@ -705,10 +732,11 @@ func (d *DFA) runStateOnByte(state *State, c int) *State {
 	if state.flag&flagLastWord != 0 { // TODO(matloob): better way of setting bool val?
 		islastword = true
 	}
-	isword := c != int(endOfText) && syntax.IsWordChar(rune(c))
+	isword := c != int(endOfText) && c != int(startOfText) && syntax.IsWordChar(rune(c))
 	// HACK(matloob): is it ok to runify c before passing it to IsWordChar?
 	if isword == islastword {
 		beforeflag |= flag(syntax.EmptyNoWordBoundary)
+		
 	} else {
 		beforeflag |= flag(syntax.EmptyWordBoundary)
 	}
@@ -720,7 +748,7 @@ func (d *DFA) runStateOnByte(state *State, c int) *State {
 		d.q0, d.q1 = d.q1, d.q0
 	}
 	ismatch := false
-	d.runWorkqOnByte(d.q0, d.q1, c, afterflag, &ismatch, d.kind, d.startUnanchored)
+	d.runWorkqOnByte(d.q0, d.q1, c, afterflag, &ismatch, d.kind)
 
 	// Most of the time, we build the state from the output of
 	// RunWorkqOnByte, so swap q0_ and q1_ here.  However, so that
@@ -730,7 +758,7 @@ func (d *DFA) runStateOnByte(state *State, c int) *State {
 	// of the string, but we're at the end of the text so that's okay.
 	// Leaving q0_ alone preseves the match instructions that led to
 	// the current setting of ismatch.
-	if c != int(endOfText) || d.kind != manyMatch {
+	if (c != int(endOfText) && c != int(startOfText)) || d.kind != manyMatch {
 		d.q0, d.q1 = d.q1, d.q0
 	}
 
@@ -896,7 +924,6 @@ func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 
 	// Save the needed empty-width flags in the top bits for use later.
 	flags |= needflags << flagNeedShift
-
 	state := d.cachedState(ids, flags)
 	/* delete[] ids */
 	return state
@@ -931,7 +958,7 @@ func (d *DFA) cachedState(ids []int, flags flag) *State {
 	// Allocate new state, along with room for next and inst.
 	// TODO(matloob): this code does a bunch of UNSAFE stuff...
 
-	state := &State{ids, flags, make([]*State, 257)}
+	state := &State{ids, flags, make([]*State, len(d.divides)+2)}
 	d.stateCache.insert(state)
 	return state
 }
@@ -996,6 +1023,7 @@ func (d *DFA) addToQueue(q *workq, id int, flags flag) {
 			empty := flag(inst.Arg)
 			if empty&flags == empty { // TODO(matloob): REEXAMINE ME!
 				stk[nstk] = int(inst.Out)
+				nstk++
 			}
 			break
 		}
@@ -1035,7 +1063,7 @@ func (d *DFA) runWorkqOnEmptyString(oldq *workq, newq *workq, flag flag) {
 // means to match c$.  Sets the bool *ismatch to true if the end of the
 // regular expression program has been reached (the regexp has matched).
 func (d *DFA) runWorkqOnByte(oldq *workq, newq *workq, c int, flag flag,
-	ismatch *bool, kind matchKind, newByteLoop int) {
+	ismatch *bool, kind matchKind) {
 	// if DEBUG_MODE { d.mu.assertHeld() }
 
 	newq.clear()
@@ -1179,7 +1207,7 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 //		fmt.Println("not run forward", p, ep, start)
 		p, ep = ep, p 
 	} 
-
+	
 	// const uint8* byte
 
 	_, _, _, _ = start, bp, p, ep
@@ -1241,7 +1269,7 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 			c = int(r)
 			p -= w
 		}
-		if c == int(endOfText) { // TODO(matloob): end of text
+		if c == int(endOfText)  { // TODO(matloob): end of text
 			break
 		}
 
@@ -1343,7 +1371,6 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 				return true
 			}
 		}
-
 	}
 
 	// Process one more byte to see if it triggers a match.
@@ -1375,7 +1402,7 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 	// ATOMIC_LOAD_CONSUME(ns, &s->next_[ByteMap(lastbyte)]);
 	// TODO(matloob): ATOMIC
 	ns = s.next[d.byteMap(lastbyte)]
-	if ns != nil {
+	if ns == nil {
 		ns = d.runStateOnByteUnlocked(s, lastbyte)
 		if ns == nil {
 			panic("state saver stuff NOT implemented")
@@ -1398,6 +1425,7 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 		}
 */
 	}
+
 
 	s = ns
 	if DebugDFA {

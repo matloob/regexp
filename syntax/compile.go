@@ -104,6 +104,7 @@ func CompileReversed(re *Regexp) (*Prog, error) {
 	var c compiler
 	c.init()
 	c.reversed = true
+	re = re.Simplify()
 	f := c.compile(re)
 	f.out.patch(c.p, c.inst(InstMatch).i)
 	c.p.Start = int(f.i)
@@ -200,7 +201,8 @@ func (c *compiler) compile(re *Regexp) frag {
 		}
 		return f
 	}
-	panic("regexp: unhandled case in compile")
+	
+	panic("regexp: unhandled case in compile" + string(re.Op))
 }
 
 func (c *compiler) inst(op InstOp) frag {
