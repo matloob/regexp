@@ -717,13 +717,12 @@ func (d *DFA) runStateOnByte(state *State, c int) *State {
 		afterflag |= flag(syntax.EmptyBeginLine)
 	}
 
-
 	if c == int(endOfText) {
-		// Insert implicit $ and \z before the fake "end text" byte.
-			beforeflag |= flag(syntax.EmptyEndLine) | flag(syntax.EmptyEndText)
-		} else if c == int(startOfText) {
-			beforeflag |= flag(syntax.EmptyBeginLine) | flag(syntax.EmptyBeginText)	
-		}	
+	// Insert implicit $ and \z before the fake "end text" byte.
+		beforeflag |= flag(syntax.EmptyEndLine) | flag(syntax.EmptyEndText)
+	} else if c == int(startOfText) {
+		beforeflag |= flag(syntax.EmptyBeginLine) | flag(syntax.EmptyBeginText)	
+	}	
 
 	// The state flag kFlagLastWord says whether the last
 	// byte processed was a word character.  Use that info to
@@ -740,6 +739,7 @@ func (d *DFA) runStateOnByte(state *State, c int) *State {
 	} else {
 		beforeflag |= flag(syntax.EmptyWordBoundary)
 	}
+	
 
 	// Okay, finally ready to run.
 	// Only useful to rerun on empty string if there are new, useful flags.

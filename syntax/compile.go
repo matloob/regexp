@@ -148,12 +148,12 @@ func (c *compiler) compile(re *Regexp) frag {
 		return c.rune(anyRune, 0)
 	case OpBeginLine:
 		if c.reversed {
-			return c.empty(EmptyBeginLine)
+			return c.empty(EmptyEndLine)
 		}
 		return c.empty(EmptyBeginLine)
 	case OpEndLine:
 		if c.reversed {
-			return c.empty(EmptyEndLine)
+			return c.empty(EmptyBeginLine)
 		}
 		return c.empty(EmptyEndLine)
 	case OpBeginText:
