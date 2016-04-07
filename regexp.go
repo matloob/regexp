@@ -377,7 +377,7 @@ func (i *inputBytes) rstep(pos int) (rune, int) {
 		return startOfText, 0
 	}
 	if pos >= 0 {
-//		print(pos)
+//		(pos)
 		c := i.str[pos - 1]
 		if c < utf8.RuneSelf {
 			return rune(c), 1

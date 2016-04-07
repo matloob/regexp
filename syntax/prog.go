@@ -300,6 +300,9 @@ func dumpProg(b *bytes.Buffer, p *Prog) {
 		if j == p.Start {
 			pc += "*"
 		}
+		if j == p.StartUnanchored {
+			pc += "~"
+		}
 		bw(b, pc, "\t")
 		dumpInst(b, i)
 		bw(b, "\n")

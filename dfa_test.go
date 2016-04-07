@@ -17,7 +17,7 @@ func matchDFA(regexp string, input string) (int, int, bool, error) {
 		return 0, 0, false, err
 	}
 
-	d := newDFA(prog, longestMatch, 0)
+	d := newDFA(prog, firstMatch, 0)
 //	d.BuildAllStates()
 
 	revprog, err := syntax.CompileReversed(re)
@@ -85,7 +85,7 @@ func TestDFA3(t *testing.T) {
 		wantE int
 		want bool
 	}{
-		{"^abcde", "abcde", 0, 5, true },
+		{"a.", "paranormal", 1,3, true},
 	}
 	for _, tc := range testCases {
 		i, j, got, err := matchDFA(tc.re, tc.in)

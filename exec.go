@@ -464,7 +464,7 @@ func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap i
 				fmt.Println("using dfa matcher")
 			}
 			if m.dfa == nil {
-				m.dfa = newDFA(re.prog, longestMatch, 10000)
+				m.dfa = newDFA(re.prog, firstMatch, 10000)
 			}
 			if m.revdfa == nil {
 				// XXX find me a good home

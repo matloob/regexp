@@ -19,7 +19,7 @@ import (
 )
 
 // TODO(matloob): remove before submitting
-const DebugDFA = false
+const DebugDFA = true
 
 // just use ints instead of stateinst??
 type stateInst int
@@ -251,8 +251,6 @@ type searchParams struct {
 	input input // StringPiece
 	rinput rinput
 	startpos int
-	// text StringPiece
-	// context StringPiece
 	anchored          bool
 	wantEarliestMatch bool
 	runForward        bool
@@ -488,6 +486,7 @@ func (d *DFA) analyzeSearch(params *searchParams) bool {
 	if params.anchored /* || prog.anchorStart() */ {
 		start |= kStartAnchored
 	}
+	fmt.Println("d.start", d.start)
 	info := d.start[start]
 
 	if !d.analyzeSearchHelper(params, &info, flags) {
@@ -791,6 +790,8 @@ func (d *DFA) runStateOnByte(state *State, c int) *State {
 // inserts it in the cache, and returns it.
 func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 	// if DEBUG_MODE { d.mu.AssertHeld() }
+	
+	fmt.Println("workq to cached state")
 
 	// Construct array of instruction ids for the new state.
 	// Only ByteRange, EmptyWidth, and Match instructions are useful to keep:
@@ -805,8 +806,12 @@ func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 	if DebugDFA {
 		fmt.Fprintf(os.Stderr, "WorkqToCachedState %s [%x]", dumpWorkq(q), flags)
 	}
+	fmt.Println("ZEEE")
+	fmt.Println(q)
 	for i, id := range q.elements() {
+		fmt.Println("A")
 		if sawmatch && (d.kind == firstMatch || q.isMark(id)) {
+			fmt.Println("XXX")
 			break
 		}
 		if q.isMark(id) {
@@ -815,6 +820,7 @@ func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 				ids[n] = int(mark) // TODO(matloob): handle another int(mark)
 				n++
 			}
+			fmt.Println("XXX")
 			continue
 		}
 		inst := d.prog.Inst[id]
@@ -833,6 +839,7 @@ func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 				if DebugDFA {
 					fmt.Fprintf(os.Stderr, " -> FullMatchState\n")
 				}
+				fmt.Println("XXX")
 				return fullMatchState
 			}
 			fallthrough
@@ -844,7 +851,7 @@ func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 			if inst.Op == syntax.InstEmptyWidth {
 				needflags |= flag(inst.Arg)
 			}
-			if inst.Op == syntax.InstMatch && false /* prog.anchorEnd */ {
+			if inst.Op == syntax.InstMatch {
 				sawmatch = true
 			}
 
@@ -874,6 +881,7 @@ func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 	// of distinct states.)
 	if needflags == 0 {
 		flags &= flagMatch
+//		fmt.Println("nf0, flags=", flags, " n=", n)
 	}
 
 	// NOTE(rsc): The code above cannot do flag &= needflags,
@@ -958,8 +966,12 @@ func (d *DFA) cachedState(ids []int, flags flag) *State {
 	// Allocate new state, along with room for next and inst.
 	// TODO(matloob): this code does a bunch of UNSAFE stuff...
 
-	state := &State{ids, flags, make([]*State, len(d.divides)+2)}
+	state := &State{ids, flags, make([]*State, len(d.divides)+2)}	
+	if DebugDFA {
+		fmt.Fprintf(os.Stderr, " -> %s\n", dumpState(state))
+	}	
 	d.stateCache.insert(state)
+	
 	return state
 }
 
@@ -1095,9 +1107,11 @@ func (d *DFA) runWorkqOnByte(oldq *workq, newq *workq, c int, flag flag,
 			break
 
 		case syntax.InstMatch:
-			if /* prog.anchorEnd && !atendoftext TODO(matloob): THIS */ false {
+			if false /* is anchored to end */ && c != int(endOfText) {
+				// TODO: matloob what happens if 
 				break
 			}
+			fmt.Println("ismatch")
 			*ismatch = true
 			if kind == firstMatch {
 				return
@@ -1216,6 +1230,7 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 	var lastMatch int = -1 // most recent matching position in text
 	matched := false
 	s := start
+	fmt.Println("start", s)
 
 	if s.isMatch() { 
 		matched = true
@@ -1278,7 +1293,7 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 		// RunStateOnByte takes care of the appropriate locking,
 		// including a memory barrier so that the unlocked access
 		// (sometimes known as "double-checked locking") is safe.
-		// The alternative would be either one DFA per thread
+		// The  alternative would be either one DFA per thread
 		// or one mutex operation per input byte.
 		//
 		// ns == DeadState means the state is known to be dead
@@ -1288,11 +1303,16 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 		// RunStateOnByte returns ns == NULL if it is out of memory.
 		// ns == FullMatchState means the rest of the string matches.
 		//
+	 	// TODO(matloob): NOT TRUE!
 		// Okay to use bytemap[] not ByteMap() here, because
 		// c is known to be an actual byte and not kByteEndText.
 		var ns *State
 //		fmt.Println("next", len(s.next))
 		// ATOMIC_LOAD_CONSUME(ns, &s->next_[bytemap[c]]);
+		fmt.Println("c:", c)
+		fmt.Println("d.bytemap(c)", d.byteMap(c))
+		fmt.Println("len(s.next)", len(s.next))
+		fmt.Println(s)
 		ns = s.next[d.byteMap(c)]
 		if ns == nil {
 			ns = d.runStateOnByteUnlocked(s, c)
@@ -1345,7 +1365,7 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 		//  if (ns <= SpecialStateMax) {
 		if isSpecialState(ns) {
 			if ns == deadState {
-//				fmt.Println("deadstate")
+				fmt.Println("deadstate")
 				params.ep = lastMatch
 				return matched
 			}
