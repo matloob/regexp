@@ -9,13 +9,14 @@ package regexp
 import (
 	"bytes"
 	"fmt"
-	"math"
 	"log"
-	"matloob.io/regexp/syntax"
+	"math"
 	"os"
 	"sort"
 	"sync"
 	"sync/atomic"
+
+	"matloob.io/regexp/syntax"
 )
 
 // TODO(matloob): remove before submitting
@@ -348,7 +349,7 @@ func newDFA(prog *syntax.Prog, kind matchKind, maxMem int64) *DFA {
 	d.prog = prog
 	d.computeByteMap()
 	d.kind = kind
-	d.startUnanchored = 0
+	d.startUnanchored = prog.StartUnanchored
 	d.initFailed = false // remove initFailed!! TODO(matloob)
 	d.memBudget = maxMem
 
@@ -357,13 +358,8 @@ func newDFA(prog *syntax.Prog, kind matchKind, maxMem int64) *DFA {
 	}
 
 	nmark := 0
-	// A note on startUnanchored.
-	// To support unanchored searches in RE2, the prog will have a .* put at
-	// the location startUnanchored, patched to the actual regexp start.
-	// We don't do that here.
 	if kind == longestMatch {
 		nmark = len(prog.Inst)
-		d.startUnanchored = prog.StartUnanchored
 	}
 	nastack := 2*len(prog.Inst) + nmark
 
@@ -486,7 +482,6 @@ func (d *DFA) analyzeSearch(params *searchParams) bool {
 	if params.anchored /* || prog.anchorStart() */ {
 		start |= kStartAnchored
 	}
-	fmt.Println("d.start", d.start)
 	info := d.start[start]
 
 	if !d.analyzeSearchHelper(params, &info, flags) {
@@ -534,7 +529,6 @@ func (d *DFA) analyzeSearchHelper(params *searchParams, info *startInfo, flags f
 	d.addToQueue(d.q0, s, flags)
 	info.start = d.workqToCachedState(d.q0, flags)
 	if info.start == nil {
-		log.Print("workq to cached state returned nil!")
 		return false
 	}
 
@@ -654,13 +648,6 @@ func (d *DFA) computeByteMap() {
 		}
 		d.bytemap[i] = k
 	}
-/*	fmt.Println(d.bytemap)
-	
-	bytemap2 := make([]int, 256)
-	for i := range bytemap2 {
-		bytemap2[i] = d.byteMap(i)
-	}
-	fmt.Println(bytemap2)	*/
 }
 
 // Processes input byte c in state, returning new state.
@@ -790,8 +777,6 @@ func (d *DFA) runStateOnByte(state *State, c int) *State {
 // inserts it in the cache, and returns it.
 func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 	// if DEBUG_MODE { d.mu.AssertHeld() }
-	
-	fmt.Println("workq to cached state")
 
 	// Construct array of instruction ids for the new state.
 	// Only ByteRange, EmptyWidth, and Match instructions are useful to keep:
@@ -806,12 +791,10 @@ func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 	if DebugDFA {
 		fmt.Fprintf(os.Stderr, "WorkqToCachedState %s [%x]", dumpWorkq(q), flags)
 	}
-	fmt.Println("ZEEE")
-	fmt.Println(q)
 	for i, id := range q.elements() {
-		fmt.Println("A")
+		fmt.Println("X")
 		if sawmatch && (d.kind == firstMatch || q.isMark(id)) {
-			fmt.Println("XXX")
+			fmt.Println("d.kind == firstMatch || q.isMark(id)")
 			break
 		}
 		if q.isMark(id) {
@@ -820,7 +803,6 @@ func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 				ids[n] = int(mark) // TODO(matloob): handle another int(mark)
 				n++
 			}
-			fmt.Println("XXX")
 			continue
 		}
 		inst := d.prog.Inst[id]
@@ -839,7 +821,6 @@ func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 				if DebugDFA {
 					fmt.Fprintf(os.Stderr, " -> FullMatchState\n")
 				}
-				fmt.Println("XXX")
 				return fullMatchState
 			}
 			fallthrough
@@ -852,6 +833,7 @@ func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 				needflags |= flag(inst.Arg)
 			}
 			if inst.Op == syntax.InstMatch {
+				fmt.Println("sawmatch!!!")
 				sawmatch = true
 			}
 
@@ -1111,7 +1093,6 @@ func (d *DFA) runWorkqOnByte(oldq *workq, newq *workq, c int, flag flag,
 				// TODO: matloob what happens if 
 				break
 			}
-			fmt.Println("ismatch")
 			*ismatch = true
 			if kind == firstMatch {
 				return
@@ -1230,7 +1211,6 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 	var lastMatch int = -1 // most recent matching position in text
 	matched := false
 	s := start
-	fmt.Println("start", s)
 
 	if s.isMatch() { 
 		matched = true
@@ -1309,10 +1289,6 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 		var ns *State
 //		fmt.Println("next", len(s.next))
 		// ATOMIC_LOAD_CONSUME(ns, &s->next_[bytemap[c]]);
-		fmt.Println("c:", c)
-		fmt.Println("d.bytemap(c)", d.byteMap(c))
-		fmt.Println("len(s.next)", len(s.next))
-		fmt.Println(s)
 		ns = s.next[d.byteMap(c)]
 		if ns == nil {
 			ns = d.runStateOnByteUnlocked(s, c)
@@ -1449,7 +1425,7 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 
 	s = ns
 	if DebugDFA {
-		// fprintf(stderr, "@_: %s\n", DumpState(s).c_str());
+		fmt.Fprintf(os.Stderr, "@_: %s\n", s.Dump())
 	}
 	if s == fullMatchState {
 //		fmt.Println("fullmatch")
@@ -1516,4 +1492,7 @@ func (d *DFA) slowSearchLoop(params *searchParams) bool {
 func (d *DFA) fastSearchLoop(params *searchParams) {
 	// TODO(matloob): implement
 	d.slowSearchLoop(params)
+}
+
+func (d *DFA) possibleMatchRange() {
 }
