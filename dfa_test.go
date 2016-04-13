@@ -85,7 +85,7 @@ func TestDFA3(t *testing.T) {
 		wantE int
 		want bool
 	}{
-		{"a.", "paranormal", 1,3, true},
+		{"a.", "paranormalaxaxax", 1,3, true},
 	}
 	for _, tc := range testCases {
 		i, j, got, err := matchDFA(tc.re, tc.in)

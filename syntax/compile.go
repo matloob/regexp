@@ -84,15 +84,7 @@ func Compile(re *Regexp) (*Prog, error) {
 	f := c.compile(re)
 	f.out.patch(c.p, c.inst(InstMatch).i)
 
-	// TODO(matloob): do this better and faster!
-	ds, err := Parse(".*", Flags(0))
-	if err != nil {
-		panic("i should always be able to parse .*")
-	}
-	ds.Simplify()
-	dsf := c.quest(c.compile(ds), true)
-	dsf.out.patch(c.p, f.i)
-	c.p.StartUnanchored = int(dsf.i)
+	c.p.StartUnanchored = int(c.cat(c.star(c.rune(anyRune, 0), true), f).i)
 	// TODO(matloob): end of area that needs to be cleaned up
 
 	c.p.Start = int(f.i)

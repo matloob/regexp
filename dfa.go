@@ -20,7 +20,7 @@ import (
 )
 
 // TODO(matloob): remove before submitting
-const DebugDFA = true
+const DebugDFA = false
 
 // just use ints instead of stateinst??
 type stateInst int
@@ -322,7 +322,7 @@ type DFA struct {
 	regexp *Regexp // TODO(matloob): this isn't set yet...
 	prog            *syntax.Prog
 	kind            matchKind // kind of DFA
-	startUnanchored int       // start of unanchored program -- TODO(matloob): create this in compile?
+	startUnanchored int    
 	initFailed      bool      // initialization failed (out of memory) REMOVE THIS FIELD?? TODO(matloob)
 
 	mu sync.Mutex // what does this mean: "mutex_ >= cache_mutex.r"
@@ -459,7 +459,6 @@ func (d *DFA) analyzeSearch(params *searchParams) bool {
 	// TODO(matloob): is this necessary?
 
 	// Determine correct search type.
-	// TODO(matloob): set start and flags
 	var start int
 	var flags flag
 	if params.runForward {
@@ -681,13 +680,7 @@ func (d *DFA) runStateOnByte(state *State, c int) *State {
 	}
 	// Convert state to workq.
 	d.stateToWorkq(state, d.q0)
-
-	// Flags marking the kinds of empty-width things (^ $ etc)
-	// around this byte.  Before the byte we have the flags recorded
-	// in the State structure itself.  After the byte we have
-	// nothing yet (but that will change: read on).
-//	var needflag, beforeflag, oldbeforeflag, afterflag flag
-	
+ 
 	// Flags marking the kinds of empty-width things (^ $ etc)
 	// around this byte.  Before the byte we have the flags recorded
 	// in the State structure itself.  After the byte we have
@@ -744,16 +737,16 @@ func (d *DFA) runStateOnByte(state *State, c int) *State {
 	// of the string, but we're at the end of the text so that's okay.
 	// Leaving q0_ alone preseves the match instructions that led to
 	// the current setting of ismatch.
-	if (c != int(endOfText) && c != int(startOfText)) || d.kind != manyMatch {
+	if (c != int(endOfText)) || d.kind != manyMatch {
 		d.q0, d.q1 = d.q1, d.q0
 	}
 
 	flag := afterflag
 	if ismatch {
-		flag |= flagMatch // This conversion to empty op is surely wrong!
+		flag |= flagMatch
 	}
 	if isword {
-		flag |= flagLastWord // DITTO!
+		flag |= flagLastWord
 	}
 
 	ns = d.workqToCachedState(d.q0, flag)
@@ -792,15 +785,13 @@ func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 		fmt.Fprintf(os.Stderr, "WorkqToCachedState %s [%x]", dumpWorkq(q), flags)
 	}
 	for i, id := range q.elements() {
-		fmt.Println("X")
 		if sawmatch && (d.kind == firstMatch || q.isMark(id)) {
-			fmt.Println("d.kind == firstMatch || q.isMark(id)")
 			break
 		}
 		if q.isMark(id) {
 			if n > 0 && ids[n-1] != int(mark) {
 				sawmark = true
-				ids[n] = int(mark) // TODO(matloob): handle another int(mark)
+				ids[n] = int(mark) 
 				n++
 			}
 			continue
@@ -833,7 +824,6 @@ func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 				needflags |= flag(inst.Arg)
 			}
 			if inst.Op == syntax.InstMatch {
-				fmt.Println("sawmatch!!!")
 				sawmatch = true
 			}
 
@@ -863,7 +853,6 @@ func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 	// of distinct states.)
 	if needflags == 0 {
 		flags &= flagMatch
-//		fmt.Println("nf0, flags=", flags, " n=", n)
 	}
 
 	// NOTE(rsc): The code above cannot do flag &= needflags,
@@ -1005,7 +994,7 @@ func (d *DFA) addToQueue(q *workq, id int, flags flag) {
 		case syntax.InstAlt, syntax.InstAltMatch: // two choices: expand both, in order
 			stk[nstk] = int(inst.Arg)
 			nstk++
-			if q.maxmark() > 0 && id == d.startUnanchored && id != d.prog.Start {
+			if q.maxmark() > 0 && id == d.prog.StartUnanchored && id != d.prog.Start {
 				stk[nstk] = int(mark)
 				nstk++
 			}
@@ -1015,7 +1004,7 @@ func (d *DFA) addToQueue(q *workq, id int, flags flag) {
 
 		case syntax.InstEmptyWidth:
 			empty := flag(inst.Arg)
-			if empty&flags == empty { // TODO(matloob): REEXAMINE ME!
+			if empty&flags == empty {
 				stk[nstk] = int(inst.Out)
 				nstk++
 			}
@@ -1081,10 +1070,8 @@ func (d *DFA) runWorkqOnByte(oldq *workq, newq *workq, c int, flag flag,
 
 			// TODO(matloob): do we want inst.op() to merge the cases?
 		case syntax.InstRune, syntax.InstRune1, syntax.InstRuneAny, syntax.InstRuneAnyNotNL:
-			// THIS USUALLY WON'T WORK
-			// TODO(matloob): FIX FIX FIX
-			if inst.MatchRune(rune(c)) { // RUNE INT32 eek
-				d.addToQueue(newq, int(inst.Out), flag) // TODO,HACK(matloob): why are we converting uint32 to int?
+			if inst.MatchRune(rune(c)) { // TODO(matloob) RUNE INT32 eek
+				d.addToQueue(newq, int(inst.Out), flag)
 			}
 			break
 
@@ -1199,7 +1186,6 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 	p := params.startpos  // text scanning point
 	ep := params.ep
 	if !runForward {
-//		fmt.Println("not run forward", p, ep, start)
 		p, ep = ep, p 
 	} 
 	
@@ -1223,7 +1209,6 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 
 	var w int
 	for p != ep {
-//		fmt.Println(".")
 		if DebugDFA {
 			fmt.Fprintf(os.Stderr, "@%d: %s\n", p - bp, s.Dump())
 		}
@@ -1254,13 +1239,11 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 		if runForward {
 			var r rune
 			r, w = params.input.step(p)
-//			fmt.Println("? ", r)
 			c = int(r)
 			p += w
 		} else {
 			var r rune
 			r, w = params.rinput.rstep(p)
-//			fmt.Println("> ", r, w)
 			c = int(r)
 			p -= w
 		}
@@ -1287,7 +1270,6 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 		// Okay to use bytemap[] not ByteMap() here, because
 		// c is known to be an actual byte and not kByteEndText.
 		var ns *State
-//		fmt.Println("next", len(s.next))
 		// ATOMIC_LOAD_CONSUME(ns, &s->next_[bytemap[c]]);
 		ns = s.next[d.byteMap(c)]
 		if ns == nil {
@@ -1341,7 +1323,6 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 		//  if (ns <= SpecialStateMax) {
 		if isSpecialState(ns) {
 			if ns == deadState {
-				fmt.Println("deadstate")
 				params.ep = lastMatch
 				return matched
 			}
@@ -1350,7 +1331,7 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 		}
 		s = ns
 	
-		if s.isMatch() {
+		if s.isMatch(){
 			matched = true
 			// The DFA notices the match one rune late,
 			// so adjust p before using it in the match.
@@ -1391,9 +1372,6 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 		*/
 	}
 
-
-//	fmt.Println(s.Dump())
-//	fmt.Println(s.next)
 	var ns *State
 	// ATOMIC_LOAD_CONSUME(ns, &s->next_[ByteMap(lastbyte)]);
 	// TODO(matloob): ATOMIC
@@ -1494,5 +1472,81 @@ func (d *DFA) fastSearchLoop(params *searchParams) {
 	d.slowSearchLoop(params)
 }
 
-func (d *DFA) possibleMatchRange() {
-}
+/*
+// TODO: move args to return values
+func (d *DFA) possibleMatchRange(min, max *int, maxlen int) bool {
+	 // if (!ok) return false;
+	 
+	const maxEltRepetitions = 0
+
+	// Keep track of the number of times we've visited states previously. We only
+	// revisit a given state if it's part of a repeated group, so if the value
+	// portion of the map tuple exceeds kMaxEltRepetitions we bail out and set
+	// |*max| to |PrefixSuccessor(*max)|.	 
+	previouslyVisitedStates := make(map[*State]int)
+	
+
+	// Pick out start state for anchored search at beginning of text.
+	// RWLocker l(&cache_mutex_);
+	var params searchParams
+	// params.cacheLock = l
+	if !analyzeSearch(&params) {
+		return false
+	}
+	if params.start == deadState { // No matching strings
+		*min, *max = 0, 0
+		return true
+	}
+	if params.start = fullMatchState { // Every string matches: no max
+		return false
+	}
+	
+	// The DFA is essentially a big graph rooted at params.start
+	// and paths in the graph correspond to accepted strings.
+	// Each nod in the graph has potentially many arrows coming out,
+	// one for each rune seen plus the magic end of text character
+	// endOfText.
+
+	// To find the smallest possible prefix of an accepted
+	// string, we just walk the graph preferring to follow
+	// arrows with the lowest bytes possible.	To find the
+	// largest possible prefix, we follow the largest bytes
+	// possible.
+
+	// The test for whether there is an arrow from s on byte j is
+	//		ns = RunStateOnByteUnlocked(s, j);
+	//		if (ns == NULL)
+	//			return false;
+	//		if (ns != DeadState && ns->ninst > 0)
+	// The RunStateOnByteUnlocked call asks the DFA to build out the graph.
+	// It returns NULL only if the DFA has run out of memory,
+	// in which case we can't be sure of anything.
+	// The second check sees whether there was graph built
+	// and whether it is interesting graph.	Nodes might have
+	// ns->ninst == 0 if they exist only to represent the fact
+	// that a match was found on the previous byte.
+
+	// Build minimum prefix.
+	s := params.start
+	*min = 0
+	// MutexLock lock(&mutex)
+	for i := 0; i < maxlen; i++ {
+		if previouslyVisitedStates[s] > maxEltRepetitions {
+			break
+		}
+		previouslyVisitedStates[s]++
+		
+		// Stop if min is a match
+		ns :=d.runStateOnByteUnlocked(d, endOfText)
+		if ns == nil { // DFA out of memory
+			return false;
+		}
+		if ns != deadState && (ns == fullMatchState || ns.isMatch()) {
+			break
+		}
+		
+		// Try to extend the string
+	}
+	
+	
+}*/
