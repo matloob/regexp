@@ -1,14 +1,13 @@
 package regexp
 
 import (
-	"matloob.io/regexp/syntax"
 	"testing"
+
+	"matloob.io/regexp/syntax"
 )
 
-
-
 func matchDFA(regexp string, input string) (int, int, bool, error) {
-	re, err := syntax.Parse(regexp, syntax.Flags(0))
+	re, err := syntax.Parse(regexp, syntax.Perl)
 	if err != nil {
 		return 0, 0, false, err
 	}
@@ -63,6 +62,7 @@ func TestDFA(t *testing.T) {
 		{"[cgt]gggtaaa|tttaccc[acg]", "xtttacccce", 1, 9, true},
 		{"[日本語]+", "日本語日本語", 0, len("日本語日本語"), true},
 		{"a.", "paranormal", 1,3, true},
+		{`\B`, "x", -1, -1, false},
 	}
 	for _, tc := range testCases {
 		i, j, got, err := matchDFA(tc.re, tc.in)
@@ -85,21 +85,17 @@ func TestDFA3(t *testing.T) {
 		wantE int
 		want bool
 	}{
-		{"a.", "paranormalaxaxax", 1,3, true},
+//		{"\\B", "x", -1, -1, false},
+		{"\\B", "xx yy", 1,1,true},
 	}
 	for _, tc := range testCases {
 		i, j, got, err := matchDFA(tc.re, tc.in)
 		if err != nil {
 			t.Error(err)
+			continue
 		}
 		if got != tc.want || i != tc.wantS  || j != tc.wantE {
 			t.Errorf("matchDFA(%q, %q): got (%v, %v, %v), want (%v, %v, %v)", tc.re, tc.in, i, j, got, tc.wantS, tc.wantE, tc.want)
 		}
-	}
-}
-
-func TestDF2(t *testing.T) {
-	if b, err := MatchString("$", "abcde"); !b || err != nil{
-		t.Errorf("failed")
 	}
 }

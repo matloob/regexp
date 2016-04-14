@@ -463,12 +463,22 @@ func (d *DFA) analyzeSearch(params *searchParams) bool {
 	var flags flag
 	if params.runForward {
 		flags =  flag(input.context(params.startpos))
+		if flags & flag(syntax.EmptyBeginText) == 0 {
+			if  r, _ := reverse(input).rstep(params.startpos); syntax.IsWordChar(r) {
+				flags |= flagLastWord
+			}
+		}
 	} else {
 		flags = flag(params.rinput.context(params.ep))
 		// reverse the flag -- do this a nicer way!
 		flags = flag(int(flags) & ^0xF) |((flags & 0xA) >> 1) | ((flags & 0x5) << 1)
+		if flags & flag(syntax.EmptyBeginText) == 0 {
+			if  r, _ := params.input.step(params.ep); syntax.IsWordChar(r) {
+				flags |= flagLastWord
+			}
+		}
 	}
-	
+
 	if flags & flag(syntax.EmptyBeginText) != 0{
 		start |= startBeginText
 	} else if flags & flag(syntax.EmptyBeginLine) != 0 {
@@ -546,7 +556,8 @@ func (d *DFA) analyzeSearchHelper(params *searchParams, info *startInfo, flags f
 	// Compute info->firstbyte by running state on all
 	// possible byte values, looking for a single one that
 	// leads to a different state.
-	firstbyte := fbNone
+/*	firstbyte := fbNone
+
 	for i := 0; i < 256; i++ {
 		s := d.runStateOnByte(info.start, i)
 		if s == nil {
@@ -564,7 +575,7 @@ func (d *DFA) analyzeSearchHelper(params *searchParams, info *startInfo, flags f
 			break
 		}
 	}
-
+*/
 	// Synchronize with "quick check" above.
 	// ATOMIC_STORE_RELEASE(&info->firstbyte, kFbNone);
 	return true
@@ -703,19 +714,18 @@ func (d *DFA) runStateOnByte(state *State, c int) *State {
 		beforeflag |= flag(syntax.EmptyBeginLine) | flag(syntax.EmptyBeginText)	
 	}	
 
-	// The state flag kFlagLastWord says whether the last
+	// The state flag flagLastWord says whether the last
 	// byte processed was a word character.  Use that info to
 	// insert empty-width (non-)word boundaries.
-	var islastword bool
-	if state.flag&flagLastWord != 0 { // TODO(matloob): better way of setting bool val?
-		islastword = true
-	}
-	isword := c != int(endOfText) && c != int(startOfText) && syntax.IsWordChar(rune(c))
+	islastword := state.flag&flagLastWord != 0
+	isword := c != int(endOfText) && syntax.IsWordChar(rune(c))
+//	fmt.Println("rune:", rune(c), "isword:", isword,"  islastword:", islastword)
 	// HACK(matloob): is it ok to runify c before passing it to IsWordChar?
 	if isword == islastword {
+//		fmt.Println("no-word-boundary")
 		beforeflag |= flag(syntax.EmptyNoWordBoundary)
-		
 	} else {
+//		fmt.Println("word-boundary")
 		beforeflag |= flag(syntax.EmptyWordBoundary)
 	}
 	
