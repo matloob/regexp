@@ -8,20 +8,19 @@ package regexp
 
 import (
 	"bytes"
-	"fmt"
-	"log"
+	"errors"
 	"math"
-	"os"
 	"sort"
 	"sync"
+	"strconv"
 	"sync/atomic"
 	"unicode"
 
 	"matloob.io/regexp/syntax"
 )
 
-// TODO(matloob): remove before submitting
-var DebugDFA = false
+const DebugDFA = false
+var DebugPrintf = func(format string, a ...interface{}) {}
 
 // just use ints instead of stateinst??
 type stateInst int
@@ -100,20 +99,23 @@ func (s *State) Dump() string {
 	case fullMatchState:
 		return "*"
 	}
-	var str string
+	var buf bytes.Buffer
 	sep := ""
-	str += fmt.Sprintf("(%p)", s)
+	buf.WriteString("(0x<TODO(matloob):state id>)")
+	// buf.WriteString(fmt.Sprintf("(%p)", s)
 	for _, inst := range s.inst {
 		if inst == int(mark) {
-			str += "|"
+			buf.WriteString("|")
 			sep = ""
 		} else {
-			str += fmt.Sprintf("%s%d", sep, inst)
+			buf.WriteString(sep)
+			buf.WriteString(strconv.Itoa(inst))
 			sep = ","
 		}
 	}
-	str += fmt.Sprintf(" flag=%#x", s.flag)
-	return str
+	buf.WriteString("flag=0x")
+	buf.WriteString(strconv.FormatUint(uint64(s.flag), 16))
+	return buf.String()
 }
 
 type sparseSet struct {
@@ -353,7 +355,7 @@ func newDFA(prog *syntax.Prog, kind matchKind, maxMem int64) *DFA {
 	d.memBudget = maxMem
 
 	if DebugDFA {
-		fmt.Fprintf(os.Stderr, "\nkind %d\n%v\n", kind, prog)
+		DebugPrintf("\nkind %d\n%v\n", kind, prog)
 	}
 
 	nmark := 0
@@ -396,9 +398,6 @@ func (d *DFA) search(i input, startpos int, reversed *DFA) (int, int, bool) {
 	}
 	b := d.slowSearchLoop(&params)
 	if !b {
-		if DebugDFA {
-			fmt.Println("first loop failed")
-		}
 		return -1, -1, false
 	}
 	end := params.ep
@@ -416,9 +415,7 @@ func (d *DFA) search(i input, startpos int, reversed *DFA) (int, int, bool) {
 	}
 	b = reversed.slowSearchLoop(&params)
 	if DebugDFA {
-
-		fmt.Fprintf(os.Stderr, "\nkind %d\n%v\n", d.kind, d.prog)
-		fmt.Println("success??", b)
+		DebugPrintf("\nkind %d\n%v\n", d.kind, d.prog)
 	}
 	return params.ep, end, b
 }
@@ -739,7 +736,8 @@ func (d *DFA) runStateOnByte(state *State, c int) *State {
 	// If someone else already computed this, return it.
 	var ns *State
 	if !(d.byteMap(c) < len(state.next)) {
-		log.Panicf("d.byteMap(c) > len(state.next)... %d > %d", d.byteMap(c), len(state.next))
+		// TODO(matloob): return this as an error?
+		panic(errors.New("byte range index is greater than number out arrows from state"))
 	}
 	ns = state.next[d.byteMap(c)]
 	// ATOMIC_LOAD_CONSUME TODO(matloob): fix this
@@ -776,13 +774,10 @@ func (d *DFA) runStateOnByte(state *State, c int) *State {
 	// insert empty-width (non-)word boundaries.
 	islastword := state.flag&flagLastWord != 0
 	isword := c != int(endOfText) && syntax.IsWordChar(rune(c))
-//	fmt.Println("rune:", rune(c), "isword:", isword,"  islastword:", islastword)
 	// HACK(matloob): is it ok to runify c before passing it to IsWordChar?
 	if isword == islastword {
-//		fmt.Println("no-word-boundary")
 		beforeflag |= flag(syntax.EmptyNoWordBoundary)
 	} else {
-//		fmt.Println("word-boundary")
 		beforeflag |= flag(syntax.EmptyWordBoundary)
 	}
 	
@@ -849,7 +844,7 @@ func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 	sawmatch := false    // whether queue contains guaranteed InstMatch
 	sawmark := false     // whether queue contains a mark
 	if DebugDFA {
-		fmt.Fprintf(os.Stderr, "WorkqToCachedState %s [%x]", dumpWorkq(q), flags)
+		DebugPrintf("WorkqToCachedState %s [%x]", dumpWorkq(q), flags)
 	}
 	for i, id := range q.elements() {
 		if sawmatch && (d.kind == firstMatch || q.isMark(id)) {
@@ -877,7 +872,7 @@ func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 				(flags&flagMatch != 0) { // TODO(matloob): another conversion
 				// delete[] ids
 				if DebugDFA {
-					fmt.Fprintf(os.Stderr, " -> FullMatchState\n")
+					DebugPrintf(" -> FullMatchState\n")
 				}
 				return fullMatchState
 			}
@@ -942,7 +937,7 @@ func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 	if n == 0 && flags == 0 {
 		// delete[] inst
 		if DebugDFA {
-			fmt.Fprint(os.Stderr, " -> DeadState\n")
+			DebugPrintf(" -> DeadState\n")
 		}
 		return deadState
 	}
@@ -989,7 +984,7 @@ func (d *DFA) cachedState(ids []int, flags flag) *State {
 	f := d.stateCache.find(&stateKey)
 	if f != nil {
 		if DebugDFA {
-			fmt.Fprintf(os.Stderr, " -cached-> %s\n", dumpState(f))
+			DebugPrintf(" -cached-> %s\n", dumpState(f))
 		}
 		return f
 	}
@@ -1006,7 +1001,7 @@ func (d *DFA) cachedState(ids []int, flags flag) *State {
 
 	state := &State{ids, flags, make([]*State, len(d.divides)+2)}	
 	if DebugDFA {
-		fmt.Fprintf(os.Stderr, " -> %s\n", dumpState(state))
+		DebugPrintf(" -> %s\n", dumpState(state))
 	}	
 	d.stateCache.insert(state)
 	
@@ -1138,9 +1133,6 @@ func (d *DFA) runWorkqOnByte(oldq *workq, newq *workq, c int, flag flag,
 			// TODO(matloob): do we want inst.op() to merge the cases?
 		case syntax.InstRune, syntax.InstRune1, syntax.InstRuneAny, syntax.InstRuneAnyNotNL:
 			if inst.MatchRune(rune(c)) { // TODO(matloob) RUNE INT32 eek
-				if DebugDFA {
-					fmt.Println(string([]rune{rune(c)}))
-				}
 				d.addToQueue(newq, int(inst.Out), flag)
 			}
 			break
@@ -1159,7 +1151,7 @@ func (d *DFA) runWorkqOnByte(oldq *workq, newq *workq, c int, flag flag,
 	}
 
 	if DebugDFA {
-		fmt.Fprintf(os.Stderr, "%s on %d[%x] -> %s [%v]\n",
+		DebugPrintf("%s on %d[%x] -> %s [%v]\n",
 			dumpWorkq(oldq), c, flag, dumpWorkq(newq), *ismatch)
 	}
 
@@ -1170,10 +1162,11 @@ func dumpWorkq(q *workq) string {
 	sep := ""
 	for _, v := range q.elements() {
 		if q.isMark(v) {
-			fmt.Fprint(&buf, "|")
+			buf.WriteString("|")
 			sep = ""
 		} else {
-			fmt.Fprintf(&buf, "%s%d", sep, v)
+			buf.WriteString(sep)
+			buf.WriteString(strconv.Itoa(v))
 			sep = ","
 		}
 	}
@@ -1280,7 +1273,7 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 	var w int
 	for p != ep {
 		if DebugDFA {
-			fmt.Fprintf(os.Stderr, "@%d: %s\n", p - bp, s.Dump())
+			DebugPrintf("@%d: %s\n", p - bp, s.Dump())
 		}
 		if haveFirstbyte && s == start {
 			// TODO(matloob): Correct the comment
@@ -1320,10 +1313,6 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 		if c == int(endOfText)  { // TODO(matloob): end of text
 			break
 		}
-
-		if DebugDFA {
-			fmt.Println("c: ", c)
-			}
 
 		// Note that multiple threads might be consulting
 		// s->next_[bytemap[c]] simultaneously.
@@ -1415,7 +1404,7 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 				lastMatch = p + w
 			}
 			if DebugDFA {
-				fmt.Fprintf(os.Stderr, "match @%d! [%s]\n", lastMatch - bp, s.Dump())
+				DebugPrintf("match @%d! [%s]\n", lastMatch - bp, s.Dump())
 			}
 			if wantEarliestMatch {
 				params.ep = lastMatch
@@ -1477,15 +1466,13 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 
 	s = ns
 	if DebugDFA {
-		fmt.Fprintf(os.Stderr, "@_: %s\n", s.Dump())
+		DebugPrintf("@_: %s\n", s.Dump())
 	}
 	if s == fullMatchState {
-//		fmt.Println("fullmatch")
 		params.ep = ep
 		return true
 	}
 	if !isSpecialState(s) && s.isMatch() {
-//		fmt.Println("match")
 		matched = true
 		lastMatch = p
 		// TODO(matloob): Just remove this? Do we support ManyMatch?
@@ -1499,9 +1486,6 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 				}
 			}
 			params.matches = v
-		}
-		if DebugDFA {
-		//	fprintf(stderr, "match @%d! [%s]\n", static_cast<int>(lastmatch - bp), DumpState(s).c_str());
 		}
 	}
 	params.ep = lastMatch
