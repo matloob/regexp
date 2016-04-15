@@ -1,12 +1,12 @@
-// Copyright 2014 The Go Authors.  All rights reserved.
+// Copyright 2014 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
 package regexp
 
 import (
-	"matloob.io/regexp/syntax"
 	"reflect"
+	"matloob.io/regexp/syntax"
 	"testing"
 )
 
@@ -132,8 +132,6 @@ func TestMergeRuneSet(t *testing.T) {
 		}
 	}
 }
-
-const noStr = `!`
 
 var onePass = &onePassProg{}
 

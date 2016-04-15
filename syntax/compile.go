@@ -8,11 +8,11 @@ import "unicode"
 
 // A patchList is a list of instruction pointers that need to be filled in (patched).
 // Because the pointers haven't been filled in yet, we can reuse their storage
-// to hold the list.  It's kind of sleazy, but works well in practice.
+// to hold the list. It's kind of sleazy, but works well in practice.
 // See http://swtch.com/~rsc/regexp/regexp1.html for inspiration.
 //
 // These aren't really pointers: they're integers, so we can reinterpret them
-// this way without using package unsafe.  A value l denotes
+// this way without using package unsafe. A value l denotes
 // p.inst[l>>1].Out (l&1==0) or .Arg (l&1==1).
 // l == 0 denotes the empty list, okay because we start every program
 // with a fail instruction, so we'll never want to point at its output link.
@@ -194,7 +194,7 @@ func (c *compiler) compile(re *Regexp) frag {
 		return f
 	}
 	
-	panic("regexp: unhandled case in compile" + string(re.Op))
+	panic("regexp: unhandled case in compile")
 }
 
 func (c *compiler) inst(op InstOp) frag {
