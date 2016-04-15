@@ -456,6 +456,16 @@ func (d *DFA) BuildAllStates() int {
 	return len(q)
 }
 
+func (d *DFA) loadNextState(from *State, r rune) *State {
+	// TODO(matloob): Atomize this once *States are indexes into state array...
+	return from.next[d.byteMap(int(r))]
+}
+
+func (d *DFA) storeNextState(from *State, r rune, to *State) {
+	// TODO(matloob): Atomize this once *States are indexes into state array...
+	from.next[d.byteMap(int(r))] = to
+}
+
 func (d *DFA) analyzeSearch(params *searchParams) bool {
 	input := params.input
 
@@ -503,27 +513,15 @@ func (d *DFA) analyzeSearch(params *searchParams) bool {
 		return false
 	}
 
-	if DebugDFA {
-		var fb int
-		_ = fb
-		/*
-		   ATOMIC_LOAD_RELAXED(fb, &info->firstbyte);
-		   fprintf(stderr, "anchored=%d fwd=%d flags=%#x state=%s firstbyte=%d\n",
-		           params->anchored, params->run_forward, flags,
-		           DumpState(info->start).c_str(), fb);
-		*/
-	}
-
 	params.start = info.start
-	params.firstbyte = atomic.LoadInt64(&info.firstbyte) // is this correct?
-	//   ATOMIC_LOAD_ACQUIRE(params->firstbyte, &info->firstbyte);
+	params.firstbyte = atomic.LoadInt64(&info.firstbyte)
 
 	return true
 }
 
 func (d *DFA) analyzeSearchHelper(params *searchParams, info *startInfo, flags flag) bool {
 	// Quick check;
-	fb := atomic.LoadInt64(&info.firstbyte) // another ATOMIC_LOAD_ACQUIRE
+	fb := atomic.LoadInt64(&info.firstbyte)
 	if fb != fbUnknown {
 		return true
 	}
@@ -547,41 +545,18 @@ func (d *DFA) analyzeSearchHelper(params *searchParams, info *startInfo, flags f
 
 	if info.start == deadState {
 		// Synchronize with "quick check" above.
-		// ATOMIC_STORE_RELEASE(&info->firstbyte, kFbNone);
+		atomic.StoreInt64(&info.firstbyte, fbNone)
 		return true
 	}
 
 	if info.start == fullMatchState {
 		// Synchronize with "quick check" above.
-		// ATOMIC_STORE_RELEASE(&info->firstbyte, kFbNone);  // will be ignored
+		atomic.StoreInt64(&info.firstbyte, fbNone)
 		return true
 	}
 
-	// Compute info->firstbyte by running state on all
-	// possible byte values, looking for a single one that
-	// leads to a different state.
-/*	firstbyte := fbNone
-
-	for i := 0; i < 256; i++ {
-		s := d.runStateOnByte(info.start, i)
-		if s == nil {
-			// Synchronize with "quick check" above.
-			// ATOMIC_STORE_RELEASE(&info->firstbyte, kFbNone);
-			return false
-		}
-		if s == info.start {
-			continue
-		}
-		if firstbyte == fbNone {
-			firstbyte = i // ... first one
-		} else {
-			firstbyte = fbMany
-			break
-		}
-	}
-*/
 	// Synchronize with "quick check" above.
-	// ATOMIC_STORE_RELEASE(&info->firstbyte, kFbNone);
+	atomic.StoreInt64(&info.firstbyte, fbNone)
 	return true
 
 }
@@ -593,8 +568,6 @@ func (d *DFA) runStateOnByteUnlocked(state *State, c int) *State {
 	defer d.mu.Unlock()
 	return d.runStateOnByte(state, c)
 }
-
-
 
 // Looks up bytes in d.bytemap but handles case c == kByteEndText too.
 func (d *DFA) byteMap(c int) int {
@@ -739,8 +712,7 @@ func (d *DFA) runStateOnByte(state *State, c int) *State {
 		// TODO(matloob): return this as an error?
 		panic(errors.New("byte range index is greater than number out arrows from state"))
 	}
-	ns = state.next[d.byteMap(c)]
-	// ATOMIC_LOAD_CONSUME TODO(matloob): fix this
+	ns = d.loadNextState(state, rune(c))
 	if ns != nil {
 		return ns
 	}
@@ -817,12 +789,7 @@ func (d *DFA) runStateOnByte(state *State, c int) *State {
 	// Write barrier before updating state->next_ so that the
 	// main search loop can proceed without any locking, for speed.
 	// (Otherwise it would need one mutex operation per input byte.)
-
-	// TODO(matloob): HANDLE THIS!!!!!!!
-
-	// THIS NEEDS TO BE ATOMIC!
-	state.next[d.byteMap(c)] = ns
-	// ATOMIC_STORE_RELEASE(&state->next_[ByteMap(c)], ns);
+	d.storeNextState(state, rune(c), ns)
 
 	return ns
 }
@@ -1328,13 +1295,7 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 		// (need to call RunStateOnByteUnlocked).
 		// RunStateOnByte returns ns == NULL if it is out of memory.
 		// ns == FullMatchState means the rest of the string matches.
-		//
-	 	// TODO(matloob): NOT TRUE!
-		// Okay to use bytemap[] not ByteMap() here, because
-		// c is known to be an actual byte and not kByteEndText.
-		var ns *State
-		// ATOMIC_LOAD_CONSUME(ns, &s->next_[bytemap[c]]);
-		ns = s.next[d.byteMap(c)]
+		ns := d.loadNextState(s, rune(c))
 		if ns == nil {
 			ns = d.runStateOnByteUnlocked(s, c)
 			if ns == nil {
@@ -1435,10 +1396,7 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 		*/
 	}
 
-	var ns *State
-	// ATOMIC_LOAD_CONSUME(ns, &s->next_[ByteMap(lastbyte)]);
-	// TODO(matloob): ATOMIC
-	ns = s.next[d.byteMap(lastbyte)]
+	ns := d.loadNextState(s, rune(lastbyte))
 	if ns == nil {
 		ns = d.runStateOnByteUnlocked(s, lastbyte)
 		if ns == nil {
