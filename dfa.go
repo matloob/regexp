@@ -21,7 +21,7 @@ import (
 )
 
 // TODO(matloob): remove before submitting
-const DebugDFA = false
+var DebugDFA = false
 
 // just use ints instead of stateinst??
 type stateInst int
@@ -324,7 +324,6 @@ type DFA struct {
 	prog            *syntax.Prog
 	kind            matchKind // kind of DFA
 	startUnanchored int    
-	initFailed      bool      // initialization failed (out of memory) REMOVE THIS FIELD?? TODO(matloob)
 
 	mu sync.Mutex // what does this mean: "mutex_ >= cache_mutex.r"
 
@@ -351,7 +350,6 @@ func newDFA(prog *syntax.Prog, kind matchKind, maxMem int64) *DFA {
 	d.computeByteMap()
 	d.kind = kind
 	d.startUnanchored = prog.StartUnanchored
-	d.initFailed = false // remove initFailed!! TODO(matloob)
 	d.memBudget = maxMem
 
 	if DebugDFA {
@@ -398,6 +396,9 @@ func (d *DFA) search(i input, startpos int, reversed *DFA) (int, int, bool) {
 	}
 	b := d.slowSearchLoop(&params)
 	if !b {
+		if DebugDFA {
+			fmt.Println("first loop failed")
+		}
 		return -1, -1, false
 	}
 	end := params.ep
@@ -414,6 +415,11 @@ func (d *DFA) search(i input, startpos int, reversed *DFA) (int, int, bool) {
 		return -2, -2, false
 	}
 	b = reversed.slowSearchLoop(&params)
+	if DebugDFA {
+
+		fmt.Fprintf(os.Stderr, "\nkind %d\n%v\n", d.kind, d.prog)
+		fmt.Println("success??", b)
+	}
 	return params.ep, end, b
 }
 
@@ -627,37 +633,72 @@ func (d *DFA) computeByteMap() {
 	for _, inst := range d.prog.Inst {
 		switch inst.Op {
 		case syntax.InstRune:
-			for i := 0; i < len(inst.Rune); i += 2 {
-				divides[inst.Rune[i]] = true
-				if i+1 < len(inst.Rune) {
-				divides[inst.Rune[i+1] + 1] = true
-				}
-			}
 			if len(inst.Rune) == 1 {
 				r0 :=inst.Rune[0]
+				divides[r0] = true
+				divides[r0+1] = true
 				if syntax.Flags(inst.Arg)&syntax.FoldCase != 0 {
 					for r1 := unicode.SimpleFold(r0); r1 != r0; r1 = unicode.SimpleFold(r1) {
+									
 						divides[r1] = true
+						
 						divides[r1+1] = true
 					}
 				}
+				break
+			} else {		
+				for i := 0; i < len(inst.Rune); i += 2 {
+					divides[inst.Rune[i]] = true
+					divides[inst.Rune[i+1] +1] = true
+					if syntax.Flags(inst.Arg)&syntax.FoldCase != 0 {
+						rl := inst.Rune[i]
+						rh:=inst.Rune[i+1]
+						for r0 := rl; r0 <= rh; r0++ {
+							// range mapping doesn't commute...
+							for r1 := unicode.SimpleFold(r0); r1 != r0; r1 = unicode.SimpleFold(r1) {
+								divides[r1] = true
+						
+								divides[r1+1] = true
+							}
+						}
+					}
+				}
 			}
+
 		case syntax.InstRune1:
 			r0 := inst.Rune[0]
 			divides[r0] = true
 			divides[r0 + 1]  = true
-/*			if syntax.Flags(inst.Arg)&syntax.FoldCase != 0 {
+			if syntax.Flags(inst.Arg)&syntax.FoldCase != 0 {
 				for r1 := unicode.SimpleFold(r0); r1 != r0; r1 = unicode.SimpleFold(r1) {
 					divides[r1] = true
 					divides[r1+1] = true
 				}
-			}*/
+			}
 		case syntax.InstRuneAnyNotNL: 
 			divides['\n'] = true
 			divides['\n'+1] = true
+		
+		
+		case syntax.InstEmptyWidth: 
+			switch syntax.EmptyOp(inst.Arg) {
+				case syntax.EmptyBeginLine, syntax.EmptyEndLine:
+					divides['\n'] = true
+					divides['\n'+1] = true
+				case syntax.EmptyWordBoundary, syntax.EmptyNoWordBoundary:
+					// can we turn this into an InstRune?
+					divides['A'] = true
+					divides['Z'+1] = true
+					divides['a'] = true
+					divides['z' + 1] = true
+					divides['0'] = true
+					divides['9'+1] = true
+					divides['_'] = true
+					divides['_'+1] = true
+			}
 		}
-
 	}
+
 	
 	divl := make([]int, 0,len(divides))
 	divl = append(divl, -1)
@@ -673,7 +714,7 @@ func (d *DFA) computeByteMap() {
 			k++
 		}
 		d.bytemap[i] = k
-	}
+	} 
 }
 
 // Processes input byte c in state, returning new state.
@@ -1097,6 +1138,9 @@ func (d *DFA) runWorkqOnByte(oldq *workq, newq *workq, c int, flag flag,
 			// TODO(matloob): do we want inst.op() to merge the cases?
 		case syntax.InstRune, syntax.InstRune1, syntax.InstRuneAny, syntax.InstRuneAnyNotNL:
 			if inst.MatchRune(rune(c)) { // TODO(matloob) RUNE INT32 eek
+				if DebugDFA {
+					fmt.Println(string([]rune{rune(c)}))
+				}
 				d.addToQueue(newq, int(inst.Out), flag)
 			}
 			break
@@ -1276,6 +1320,10 @@ func (d *DFA) inlinedSearchLoop(params *searchParams, haveFirstbyte, wantEarlies
 		if c == int(endOfText)  { // TODO(matloob): end of text
 			break
 		}
+
+		if DebugDFA {
+			fmt.Println("c: ", c)
+			}
 
 		// Note that multiple threads might be consulting
 		// s->next_[bytemap[c]] simultaneously.
