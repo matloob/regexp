@@ -5,7 +5,6 @@
 package regexp
 
 import (
-	"fmt"
 	"io"
 	"matloob.io/regexp/syntax"
 )
@@ -428,7 +427,6 @@ func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap i
 		size = len(s)
 	}
 	if m.op != notOnePass {
-//		fmt.Println("onepass")
 		if !m.onepass(i, pos) {
 			re.put(m)
 			return nil
@@ -445,11 +443,7 @@ func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap i
 		_ = size
 		if ncap <= 0 {
 			if reverse(i) == nil {
-	//			fmt.Println("NFA")
 				goto nfa
-			}
-			if DebugDFA {
-				fmt.Println("using dfa matcher")
 			}
 			var dfa *DFA 
 			if m.re.longest {
@@ -486,7 +480,6 @@ func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap i
 			}
 			if !matched {
 				re.put(m)
-//				fmt.Println(re, "not matched", i, j)
 				return nil
 			}
 			goto e
