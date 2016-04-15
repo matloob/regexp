@@ -1,6 +1,7 @@
 package regexp
 
 import (
+	"reflect"
 	"testing"
 
 	"matloob.io/regexp/syntax"
@@ -76,6 +77,36 @@ func TestDFA(t *testing.T) {
 
 }
 
+
+func TestLongest2(t *testing.T) {
+	re, err := Compile(`a(|b)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	re.Longest()
+	if g, w := re.FindString("ab"), "ab"; g != w {
+		t.Errorf("longest match was %q, want %q", g, w)
+	}
+}
+
+func TestLongest3(t *testing.T) {
+	re, err := Compile(`(?:A|(?:A|a))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	re.longest=false
+	if g, w := re.FindStringSubmatchIndex("B"), []int(nil); !reflect.DeepEqual(g,w) {
+		t.Errorf("longest match was %v, want %v", g, w)
+	}
+	re.longest=true
+	if g, w := re.FindStringSubmatchIndex("B"), []int(nil); !reflect.DeepEqual(g,w) {
+		t.Errorf("longest match was %v, want %v", g, w)
+	}
+}
+
+
+
+
 func TestDFA3(t *testing.T) {
 	// These are all anchored matches.
 	testCases := []struct {
@@ -86,7 +117,9 @@ func TestDFA3(t *testing.T) {
 		want bool
 	}{
 //		{"\\B", "x", -1, -1, false},
-		{"\\B", "xx yy", 1,1,true},
+//		{"\\B", "xx yy", 1,1,true},
+		{`(?:A|(?:A|a))`, "B", -1, -1, true},
+		{`(?:A|(?:A|a))`, "B", -1, -1, true},
 	}
 	for _, tc := range testCases {
 		i, j, got, err := matchDFA(tc.re, tc.in)

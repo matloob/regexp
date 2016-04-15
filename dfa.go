@@ -15,6 +15,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"unicode"
 
 	"matloob.io/regexp/syntax"
 )
@@ -625,7 +626,6 @@ func (d *DFA) computeByteMap() {
 	divides := make(map[rune]bool)
 	for _, inst := range d.prog.Inst {
 		switch inst.Op {
-		// Do we need something for the empty width tstuff?
 		case syntax.InstRune:
 			for i := 0; i < len(inst.Rune); i += 2 {
 				divides[inst.Rune[i]] = true
@@ -633,9 +633,25 @@ func (d *DFA) computeByteMap() {
 				divides[inst.Rune[i+1] + 1] = true
 				}
 			}
+			if len(inst.Rune) == 1 {
+				r0 :=inst.Rune[0]
+				if syntax.Flags(inst.Arg)&syntax.FoldCase != 0 {
+					for r1 := unicode.SimpleFold(r0); r1 != r0; r1 = unicode.SimpleFold(r1) {
+						divides[r1] = true
+						divides[r1+1] = true
+					}
+				}
+			}
 		case syntax.InstRune1:
-			divides[inst.Rune[0]] = true
-			divides[inst.Rune[0] + 1]  = true
+			r0 := inst.Rune[0]
+			divides[r0] = true
+			divides[r0 + 1]  = true
+/*			if syntax.Flags(inst.Arg)&syntax.FoldCase != 0 {
+				for r1 := unicode.SimpleFold(r0); r1 != r0; r1 = unicode.SimpleFold(r1) {
+					divides[r1] = true
+					divides[r1+1] = true
+				}
+			}*/
 		case syntax.InstRuneAnyNotNL: 
 			divides['\n'] = true
 			divides['\n'+1] = true

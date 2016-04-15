@@ -9,13 +9,14 @@ import (
 	"compress/bzip2"
 	"fmt"
 	"io"
-	"matloob.io/regexp/syntax"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"matloob.io/regexp/syntax"
 )
 
 // TestRE2 tests this package's regexp API against test cases

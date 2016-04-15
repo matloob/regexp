@@ -7,6 +7,7 @@ package regexp
 import (
 	"fmt"
 	"io"
+
 	"matloob.io/regexp/syntax"
 )
 
@@ -39,7 +40,7 @@ type machine struct {
 	re             *Regexp      // corresponding Regexp
 	p              *syntax.Prog // compiled program
 	op             *onePassProg // compiled onepass program, or notOnePass
-	dfa, revdfa            *DFA
+	fdfa, ldfa, revdfa            *DFA
 	maxBitStateLen int       // max length of string to search with bitstate
 	b              *bitState // state for backtracker, allocated lazily
 	q0, q1         queue     // two queues for runq, nextq
@@ -455,7 +456,7 @@ func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap i
 		}*/
 	} else {
 		_ = size
-		if ncap <= 2 {
+		if ncap <= 0 {
 			if reverse(i) == nil {
 	//			fmt.Println("NFA")
 				goto nfa
@@ -463,8 +464,17 @@ func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap i
 			if DebugDFA {
 				fmt.Println("using dfa matcher")
 			}
-			if m.dfa == nil {
-				m.dfa = newDFA(re.prog, firstMatch, 10000)
+			var dfa *DFA 
+			if m.re.longest {
+				if m.ldfa == nil {
+					m.ldfa = newDFA(re.prog, longestMatch, 10000)
+				}
+				dfa = m.ldfa
+			} else {
+				if m.fdfa == nil {
+					m.fdfa = newDFA(re.prog, firstMatch, 10000)
+				}
+				dfa = m.fdfa
 			}
 			if m.revdfa == nil {
 				// XXX find me a good home
@@ -483,12 +493,12 @@ func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap i
 			}
 			var matched bool
 			m.matchcap = m.matchcap[:ncap]
-			i, j, matched := m.dfa.search(i, pos, m.revdfa)
-//							fmt.Printf("pos: %v\nre: %v\nb: %v\ns: %v\ni: %v=n j: %v\nmatched: %v\n", pos, re, string(b), s, i, j, matched)
+			i, j, matched := dfa.search(i, pos, m.revdfa)
 			if ncap > 0 {
 				m.matchcap[0], m.matchcap[1] = i, j
 			}
 			if !matched {
+				re.put(m)
 //				fmt.Println(re, "not matched", i, j)
 				return nil
 			}
