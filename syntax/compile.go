@@ -193,7 +193,6 @@ func (c *compiler) compile(re *Regexp) frag {
 		}
 		return f
 	}
-	
 	panic("regexp: unhandled case in compile")
 }
 
