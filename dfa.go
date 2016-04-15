@@ -1166,8 +1166,6 @@ func dumpWorkq(q *workq) string {
 // The bools are equal to the same-named variables in params, but
 // making them function arguments lets the inliner specialize
 // this function to each combination (see two paragraphs above).
-// TODO(matloob): I don't think this can be inlined... we might have
-//                to change the name
 func (d *DFA) searchLoop(params *searchParams) bool {
 	haveFirstbyte := params.firstbyte >= 0
 	wantEarliestMatch := params.wantEarliestMatch
