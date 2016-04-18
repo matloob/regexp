@@ -127,6 +127,13 @@ func (s *stateSet) init(budget int) {
 	
 }
 
+// clear clears the state cache. Must hold the DFA's cache mutex to call clear.
+func (s *stateSet) clear() {
+	s.states = s.states[:0]
+	s.instpool = s.instpool[:0]
+	s.nextpool = s.nextpool[:0]
+}
+
 func (s *stateSet) find(inst []int, flag flag) *State {
 loop:
 	for i := range s.states {
@@ -175,4 +182,38 @@ func (s *stateSet) insert(inst []int, flag flag, nextsize int) *State {
 type startInfo struct {
 	start *State
 	firstbyte int64
+}
+
+type stateSaver struct {
+	dfa *DFA
+	inst []int
+	flag flag
+	isSpecial bool
+	special *State // if it's a special state special != nil
+}
+
+func (s *stateSaver) Save(dfa *DFA, state *State) {
+	s.dfa = dfa
+	if isSpecialState(state) {
+		s.inst = nil
+		s.flag = 0
+		s.special = state
+		s.isSpecial = true
+	}
+	s.isSpecial = false
+	s.flag = state.flag
+	
+	s.inst = s.inst[:0]
+	s.inst = append(s.inst, state.inst...)
+}
+
+func (s *stateSaver) Restore() *State {
+	if s.isSpecial {
+		return s.special
+	}
+	s.dfa.mu.Lock()
+	state := s.dfa.cachedState(s.inst, s.flag)
+	s.inst = nil
+	s.dfa.mu.Unlock()
+	return state
 }

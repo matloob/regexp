@@ -31,7 +31,6 @@ type searchParams struct {
 	runForward        bool
 	start             *State
 	firstbyte         int64 // int64 to be compatible with atomic ops
-	cacheLock         sync.Locker
 	failed            bool // "out" parameter: whether search gave up
 	ep                int  // "out" parameter: end pointer for match
 
@@ -115,14 +114,16 @@ func newReverseDFA(prog *syntax.Prog, kind matchKind, maxMem int64) *DFA {
 	return d
 }
 
+var errFallBack = errors.New("falling back to NFA")
+
 func (d *DFA) search(i input, startpos int, reversed *DFA) (start int, end int, matched bool, err error) {
 	defer func() {
-		if r := recover(); r != nil {
+/*		if r := recover(); r != nil {
 			if rerr, ok := r.(error); ok {
 				err = rerr
 			}
 			err = errors.New("panicked in RE execution")
-		}
+		}*/
 	}()
 	params := searchParams{}
 	params.startpos = startpos
@@ -134,7 +135,10 @@ func (d *DFA) search(i input, startpos int, reversed *DFA) (start int, end int, 
 		return -1, -1, false, errors.New("analyze search failed on forward DFA")
 	}
 	b := d.searchLoop(&params)
-	if !b {
+	if params.failed {
+		return -1, -1, false, errFallBack
+	}
+	if !b  {
 		return -1, -1, false, nil
 	}
 	end = params.ep
@@ -153,6 +157,9 @@ func (d *DFA) search(i input, startpos int, reversed *DFA) (start int, end int, 
 	b = reversed.searchLoop(&params)
 	if DebugDFA {
 		DebugPrintf("\nkind %d\n%v\n", d.kind, d.prog)
+	}
+	if params.failed {
+		return -1, -1, false, errFallBack
 	}
 	return params.ep, end, b, nil
 }
@@ -505,6 +512,7 @@ func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 	// those are the only operators with any effect in
 	// RunWorkqOnEmptyString or RunWorkqOnByte.
 
+	// TODO(matloob): This escapes... is that ok or do we need to be more careful here?
 	ids := make([]int, q.size()) // should we have a sync.pool of these?
 	n := 0
 	needflags := flag(0) // flags needed by InstEmptyWidth instructions
@@ -897,9 +905,12 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 	bp := 0 // start of text
 	p := params.startpos  // text scanning point
 	ep := params.ep
+	resetp := -1
 	if !runForward {
 		p, ep = ep, p 
 	} 
+
+	var saveS, saveStart stateSaver
 
 	// const uint8* bytemap = prog_->bytemap()
 	var lastMatch int = -1 // most recent matching position in text
@@ -974,47 +985,38 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 			ns = d.runStateOnRuneUnlocked(s, r)
 			if ns == nil {
 				panic("state saving stuff not implemented")
-			}
-			/*
-				ns = RunStateOnRuneUnlocked(s, c);
-				if (ns == NULL) {
-				  // After we reset the cache, we hold cache_mutex exclusively,
-				  // so if resetp != NULL, it means we filled the DFA state
-				  // cache with this search alone (without any other threads).
-				  // Benchmarks show that doing a state computation on every
-				  // byte runs at about 0.2 MB/s, while the NFA (nfa.cc) can do the
-				  // same at about 2 MB/s.  Unless we're processing an average
-				  // of 10 bytes per state computation, fail so that RE2 can
-				  // fall back to the NFA.
-				  if (FLAGS_re2_dfa_bail_when_slow && resetp != NULL &&
-				      (p - resetp) < 10*state_cache_.size()) {
-				    params->failed = true;
-				    return false;
-				  }
-				  resetp = p;
-		
-				  // Prepare to save start and s across the reset.
-				  StateSaver save_start(this, start);
-				  StateSaver save_s(this, s);
-		
-				  // Discard all the States in the cache.
-				  ResetCache(params->cache_lock);
-		
-				  // Restore start and s so we can continue.
-				  if ((start = save_start.Restore()) == NULL ||
-				      (s = save_s.Restore()) == NULL) {
-				    // Restore already did LOG(DFATAL).
-				    params->failed = true;
-				    return false;
-				  }
-				  ns = RunStateOnRuneUnlocked(s, c);
-				  if (ns == NULL) {
-				    LOG(DFATAL) << "RunStateOnRuneUnlocked failed after ResetCache";
-				    params->failed = true;
-				    return false;
-				  }
+				// After we reset the cache, we hold cache_mutex exclusively,
+				// so if resetp != NULL, it means we filled the DFA state
+				// cache with this search alone (without any other threads).
+				// Benchmarks show that doing a state computation on every
+				// byte runs at about 0.2 MB/s, while the NFA (Match) can do the
+				// same at about 2 MB/s.  Unless we're processing an average
+				// of 10 bytes per state computation, fail so that RE2 can
+				// fall back to the NFA.
+				if p >= 0 && p - resetp < 10*d.stateCache.size() {
+					params.failed = true
+					return false
 				}
-			*/
+				resetp = p
+				
+				// Prepare to save start and s across the reset.
+				saveStart.Save(d, start)
+				saveS.Save(d, s)
+
+				// Discard all the States in the cache.
+				d.resetCache()
+				 
+				// Restore start and s so we can continue.
+				if start, s := saveStart.Restore(), saveS.Restore(); start == nil || s == nil {
+					params.failed = true
+					return false
+				}
+				ns = d.runStateOnRuneUnlocked(s, r)
+				if ns == nil {
+					params.failed = true
+					return false
+				}	  
+			}
 	
 		}
 	
@@ -1056,27 +1058,19 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 	if ns == nil {
 		ns = d.runStateOnRuneUnlocked(s, lastbyte)
 		if ns == nil {
-			panic("state saver stuff NOT implemented")
-		}
-/*
-		ns = RunStateOnRuneUnlocked(s, lastbyte);
-		if (ns == NULL) {
-			StateSaver save_s(this, s);
-			ResetCache(params->cache_lock);
-			if ((s = save_s.Restore()) == NULL) {
-				params->failed = true;
-				return false;
+			saveS.Save(d, s)
+			d.resetCache()
+			if s = saveS.Restore(); s == nil {
+				params.failed = true
+				return false
 			}
-			ns = RunStateOnRuneUnlocked(s, lastbyte);
-			if (ns == NULL) {
-				LOG(DFATAL) << "RunStateOnByteUnlocked failed after Reset";
-				params->failed = true;
-				return false;
+			ns = d.runStateOnRuneUnlocked(s, lastbyte)
+			if ns != nil {
+				params.failed = true
+				return false
 			}
 		}
-*/
 	}
-
 
 	s = ns
 	if DebugDFA {
@@ -1104,4 +1098,16 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 	}
 	params.ep = lastMatch
 	return matched
+}
+
+func (d *DFA) resetCache() {
+	d.cacheMu.Lock()
+	
+	for i := range d.start {
+		d.start[i].start = nil
+		atomic.StoreInt64(&d.start[i].firstbyte, fbUnknown)
+	}
+	d.stateCache.clear()
+	
+	d.cacheMu.Unlock()
 }

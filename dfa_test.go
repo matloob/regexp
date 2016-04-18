@@ -8,6 +8,10 @@ import (
 )
 
 func matchDFA(regexp string, input string) (int, int, bool, error) {
+	return matchDFA2(regexp, input, false)
+}
+
+func matchDFA2(regexp string, input string, longest bool) (int, int, bool, error) {
 	re, err := syntax.Parse(regexp, syntax.Perl)
 	if err != nil {
 		return 0, 0, false, err
@@ -17,8 +21,12 @@ func matchDFA(regexp string, input string) (int, int, bool, error) {
 		return 0, 0, false, err
 	}
 
-	d := newDFA(prog, firstMatch, 0)
-	//	d.BuildAllStates()
+	kind := firstMatch
+	if longest {
+		kind = longestMatch
+	}
+
+	d := newDFA(prog, kind, 0)
 
 	revprog, err := syntax.CompileReversed(re)
 	if err != nil {
@@ -26,9 +34,6 @@ func matchDFA(regexp string, input string) (int, int, bool, error) {
 	}
 
 	reversed := newReverseDFA(revprog, longestMatch, 0)
-	/*	if reversed.BuildAllStates() == 0 {
-		fmt.Println("Failed to build all states")
-	}*/
 
 	i := &inputString{input}
 	j, k, b, err := d.search(i, 0, reversed)
