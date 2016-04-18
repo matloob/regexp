@@ -474,7 +474,11 @@ func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap i
 			}
 			var matched bool
 			m.matchcap = m.matchcap[:ncap]
-			i, j, matched := dfa.search(i, pos, m.revdfa)
+			i, j, matched, err := dfa.search(i, pos, m.revdfa)
+			if err != nil {
+				// DFA match failed ... fall back to NFA
+				goto nfa
+			}
 			if ncap > 0 {
 				m.matchcap[0], m.matchcap[1] = i, j
 			}

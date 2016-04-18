@@ -31,8 +31,8 @@ func matchDFA(regexp string, input string) (int, int, bool, error) {
 	}*/
 
 	i := &inputString{input}
-	j, k, b := d.search(i, 0, reversed)
-	return j, k, b, nil
+	j, k, b, err := d.search(i, 0, reversed)
+	return j, k, b, err
 }
 
 func TestDFA(t *testing.T) {

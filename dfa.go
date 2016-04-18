@@ -100,7 +100,7 @@ func newDFA(prog *syntax.Prog, kind matchKind, maxMem int64) *DFA {
 	// Account for space needed for DFA, q0, q1, astack.
 	/* TODO(matloob): DO state memory budget stuff */
 	d.stateBudget = d.memBudget
-	
+	d.stateCache.init(int(maxMem))
 
 	d.q0 = newWorkq(len(prog.Inst), nmark)
 	d.q1 = newWorkq(len(prog.Inst), nmark)
@@ -115,7 +115,15 @@ func newReverseDFA(prog *syntax.Prog, kind matchKind, maxMem int64) *DFA {
 	return d
 }
 
-func (d *DFA) search(i input, startpos int, reversed *DFA) (int, int, bool) {
+func (d *DFA) search(i input, startpos int, reversed *DFA) (start int, end int, matched bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if rerr, ok := r.(error); ok {
+				err = rerr
+			}
+			err = errors.New("panicked in RE execution")
+		}
+	}()
 	params := searchParams{}
 	params.startpos = startpos
 	params.wantEarliestMatch = false
@@ -123,14 +131,13 @@ func (d *DFA) search(i input, startpos int, reversed *DFA) (int, int, bool) {
 	params.runForward = true
 	params.ep = int(math.MaxInt64)
 	if !d.analyzeSearch(&params) {
-		panic("analyzesearch failed")
-		return -1, -1, false
+		return -1, -1, false, errors.New("analyze search failed on forward DFA")
 	}
 	b := d.searchLoop(&params)
 	if !b {
-		return -1, -1, false
+		return -1, -1, false, nil
 	}
-	end := params.ep
+	end = params.ep
 
 	params = searchParams{}
 	params.startpos = startpos
@@ -141,13 +148,13 @@ func (d *DFA) search(i input, startpos int, reversed *DFA) (int, int, bool) {
 	params.rinput= reverse(i)
 	params.runForward = false
 	if !reversed.analyzeSearch(&params) {
-		return -2, -2, false
+		return -2, -2, false, errors.New("analyze search failed on reverse DFA")
 	}
 	b = reversed.searchLoop(&params)
 	if DebugDFA {
 		DebugPrintf("\nkind %d\n%v\n", d.kind, d.prog)
 	}
-	return params.ep, end, b
+	return params.ep, end, b, nil
 }
 
 func (d *DFA) loadNextState(from *State, r rune) *State {
@@ -640,8 +647,7 @@ func (d *DFA) cachedState(ids []int, flags flag) *State {
 	// if DEBUG_MODE { d.mu.assertHeld() }
 
 	// Look in the cache for a pre-existing state.
-	stateKey := State{ids, flags, nil}
-	f := d.stateCache.find(&stateKey)
+	f := d.stateCache.find(ids, flags)
 	if f != nil {
 		if DebugDFA {
 			DebugPrintf(" -cached-> %s\n", f.Dump())
@@ -659,11 +665,12 @@ func (d *DFA) cachedState(ids []int, flags flag) *State {
 	// Allocate new state, along with room for next and inst.
 	// TODO(matloob): this code does a bunch of UNSAFE stuff...
 
-	state := &State{ids, flags, make([]*State, len(d.divides)+2)}	
+
+	nextsize := len(d.divides)+2
+	state := d.stateCache.insert(ids, flags, nextsize)
 	if DebugDFA {
 		DebugPrintf(" -> %s\n",  state.Dump())
-	}	
-	d.stateCache.insert(state)
+	}
 	
 	return state
 }

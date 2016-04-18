@@ -105,28 +105,43 @@ func (s *State) Dump() string {
 }
 
 type stateSet struct {
-	states []*State
+	states []State
 	
+	instpool []int
+	instpos int
 	
+	nextpool []*State
+	nextpos int
 }
 
 // inst, flag, next
 
-func (s *stateSet) find(state *State) *State {
+func (s *stateSet) init(budget int) {
+	// TODO(matloob): actually use budget number
+	s.states = make([]State, 0, 1000)
+
+	s.instpool = make([]int, 0, 5000)
+	s.instpos= 0
+	s.nextpool = make([]*State, 0, 5000)
+	s.nextpos = 0
+	
+}
+
+func (s *stateSet) find(inst []int, flag flag) *State {
 loop:
 	for i := range s.states {
-		if len(s.states[i].inst) != len(state.inst) {
+		if len(s.states[i].inst) != len(inst) {
 			continue
 		}
-		for j := range state.inst {
-			if s.states[i].inst[j] != state.inst[j] {
+		for j := range inst {
+			if s.states[i].inst[j] != inst[j] {
 				continue loop
 			}
 		}
-		if s.states[i].flag != state.flag {
+		if s.states[i].flag != flag {
 			continue
 		}
-		return s.states[i]
+		return &s.states[i]
 	}
 	return nil
 }
@@ -135,8 +150,26 @@ func (s *stateSet) size() int {
 	return len(s.states)
 }
 
-func (s *stateSet) insert(state *State) {
-	s.states = append(s.states, state)
+func (s *stateSet) insert(inst []int, flag flag, nextsize int) *State {
+	// TODO(matloob): can we insert?
+	i := len(s.states)
+	s.states = s.states[:i+1]
+	state := &s.states[i]
+	
+	instsize := len(inst)
+	state.inst = s.instpool[s.instpos:s.instpos+instsize]
+	s.instpos += instsize
+	copy(state.inst, inst)
+	
+	state.flag = flag
+	
+	state.next = s.nextpool[s.nextpos:s.nextpos+nextsize]
+	s.nextpos += nextsize
+	for i := range state.next {
+		state.next[i] = nil
+	}
+	
+	return state
 }
 
 type startInfo struct {
