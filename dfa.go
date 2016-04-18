@@ -100,6 +100,7 @@ func newDFA(prog *syntax.Prog, kind matchKind, maxMem int64) *DFA {
 	// Account for space needed for DFA, q0, q1, astack.
 	/* TODO(matloob): DO state memory budget stuff */
 	d.stateBudget = d.memBudget
+	
 
 	d.q0 = newWorkq(len(prog.Inst), nmark)
 	d.q1 = newWorkq(len(prog.Inst), nmark)
@@ -643,7 +644,7 @@ func (d *DFA) cachedState(ids []int, flags flag) *State {
 	f := d.stateCache.find(&stateKey)
 	if f != nil {
 		if DebugDFA {
-			DebugPrintf(" -cached-> %s\n", dumpState(f))
+			DebugPrintf(" -cached-> %s\n", f.Dump())
 		}
 		return f
 	}
@@ -660,7 +661,7 @@ func (d *DFA) cachedState(ids []int, flags flag) *State {
 
 	state := &State{ids, flags, make([]*State, len(d.divides)+2)}	
 	if DebugDFA {
-		DebugPrintf(" -> %s\n", dumpState(state))
+		DebugPrintf(" -> %s\n",  state.Dump())
 	}	
 	d.stateCache.insert(state)
 	

@@ -33,11 +33,6 @@ func (s *State) isMatch() bool {
 	return s.flag & flagMatch != 0
 }
 
-func dumpState(state *State) string {
-	return state.Dump()
-}
-
-
 type flag uint32
 
 var (
@@ -111,6 +106,8 @@ func (s *State) Dump() string {
 
 type stateSet struct {
 	states []*State
+	
+	
 }
 
 // inst, flag, next
