@@ -4,15 +4,11 @@
 
 package regexp
 
-// TODO(matloob): rename all the upper-case identifiers to lower-case.
-
 import (
-	"bytes"
 	"errors"
 	"math"
 	"sort"
 	"sync"
-	"strconv"
 	"sync/atomic"
 	"unicode"
 
@@ -22,231 +18,6 @@ import (
 const DebugDFA = false
 var DebugPrintf = func(format string, a ...interface{}) {}
 
-// just use ints instead of stateinst??
-type stateInst int
-
-type State struct {
-	// Instruction pointers in the state.
-	// TODO(matloob): Should these have a different type?
-	inst []int
-
-	// Empty string bitfield flags in effect on the way
-	// into this state, along with FlagMatch if this is
-	// a matching state.
-	flag flag
-
-	// Outgoing arrows from State, one per input byte class.
-	next []*State
-}
-
-func (s *State) isMatch() bool {
-	return s.flag & flagMatch != 0
-}
-
-func dumpState(state *State) string {
-	return state.Dump()
-}
-
-type flag uint32
-
-var (
-	flagEmptyMask = flag(0xFFF)
-	flagMatch   = flag(0x1000)
-	flagLastWord  = flag(0x2000)
-	flagNeedShift = flag(16)
-)
-
-// Special "firstbyte" values for a state.  (Values >= 0 denote actual bytes.)
-const (
-	fbUnknown = -1 // No analysis has been performed.
-	fbMany    = -2 // Many bytes will lead out of this state.
-	fbNone    = -3 // No bytes lead out of this state.
-)
-
-const (
-	// Indices into start for unanchored searches.
-	// Add startAnchored for anchored searches.
-	startBeginText        = 0
-	startBeginLine        = 2
-	startWordBoundary    = 4
-	startNonWordBoundary = 6
-	maxStart              = 8
-
-	kStartAnchored = 1
-)
-
-var mark stateInst = -1
-
-// TODO(matloob): in RE2 deadState and fullMatchState are (State*)(1) and (State*)(2)
-// respectively. Is it cheaper to compare with those numbers, than these states?
-// Do we need to import package unsafe?
-var deadState = &State{}
-var fullMatchState = &State{}
-
-func isSpecialState(s *State) bool {
-	// see above. cc does int comparison because deadState and fullMatchState
-	// are special numbers, but that's unsafe.
-	// TODO(matloob): convert states back to numbers. (pointers into state array state(-2) and state(-1))
-	return s == deadState || s == fullMatchState || s == nil
-}
-
-func (s *State) Dump() string {
-	switch s {
-	case nil:
-		return "_"
-	case deadState:
-		return "X"
-	case fullMatchState:
-		return "*"
-	}
-	var buf bytes.Buffer
-	sep := ""
-	buf.WriteString("(0x<TODO(matloob):state id>)")
-	// buf.WriteString(fmt.Sprintf("(%p)", s)
-	for _, inst := range s.inst {
-		if inst == int(mark) {
-			buf.WriteString("|")
-			sep = ""
-		} else {
-			buf.WriteString(sep)
-			buf.WriteString(strconv.Itoa(inst))
-			sep = ","
-		}
-	}
-	buf.WriteString("flag=0x")
-	buf.WriteString(strconv.FormatUint(uint64(s.flag), 16))
-	return buf.String()
-}
-
-type sparseSet struct {
-	sparseToDense []int
-	dense         []int
-}
-
-func makeSparseSet(maxSize int) sparseSet {
-	// 	s.maxSize = maxSize  // not necessary, right?
-	return sparseSet{
-		sparseToDense: make([]int, maxSize),
-		dense:         make([]int, maxSize),
-	}
-}
-
-func (s *sparseSet) resize(newMaxSize int) {
-	// TODO(matloob): Use slice length instead of size for 'dense'.
-	// Use cap instead of maxSize for both.
-	size := len(s.dense)
-	if size > newMaxSize {
-		size = newMaxSize
-	}
-	if newMaxSize > len(s.sparseToDense) {
-		a := make([]int, newMaxSize)
-		if s.sparseToDense != nil {
-			copy(a, s.sparseToDense)
-		}
-		s.sparseToDense = a
-
-		a = make([]int, size, newMaxSize)
-		if s.dense != nil {
-			copy(a, s.dense)
-		}
-		s.dense = a
-	}
-}
-
-func (s *sparseSet) maxSize() int {
-	return cap(s.dense)
-}
-
-func (s *sparseSet) clear() {
-	s.dense = s.dense[:0]
-}
-
-func (s *sparseSet) contains(i int) bool {
-	if i >= len(s.sparseToDense) {
-		return false
-	}
-	return s.sparseToDense[i] < len(s.dense) && s.dense[s.sparseToDense[i]] == i
-}
-
-func (s *sparseSet) insert(i int) {
-	if s.contains(i) {
-		return
-	}
-	s.insertNew(i)
-}
-
-func (s *sparseSet) insertNew(i int) {
-	if i >= len(s.sparseToDense) {
-		return
-	}
-	// There's a CHECK here that size < maxSize...
-
-	s.sparseToDense[i] = len(s.dense)
-	s.dense = s.dense[:len(s.dense)+1]
-	s.dense[len(s.dense)-1] = i
-}
-
-type workq struct {
-	s           sparseSet
-	n           int  // size excluding marks
-	maxm        int  // maximum number of marks
-	nextm       int  // id of next mark
-	lastWasMark bool // last inserted was mark
-}
-
-func newWorkq(n, maxmark int) *workq {
-	return &workq{
-		s:           makeSparseSet(n + maxmark),
-		n:           n,
-		maxm:        maxmark,
-		nextm:       n,
-		lastWasMark: true,
-	}
-}
-
-func (q *workq) isMark(i int) bool { return i >= q.n }
-
-func (q *workq) clear() {
-	q.s.clear()
-	q.nextm = q.n
-}
-
-func (q *workq) contains(i int) bool {
-	return q.s.contains(i)
-}
-
-func (q *workq) maxmark() int {
-	return q.maxm
-}
-
-func (q *workq) mark() {
-	if q.lastWasMark {
-		return
-	}
-	q.lastWasMark = false
-	q.s.insertNew(int(q.nextm))
-	q.nextm++
-}
-
-func (q *workq) size() int {
-	return q.n + q.maxm
-}
-
-func (q *workq) insert(id int) {
-	if q.s.contains(id) {
-		return
-	}
-	q.insertNew(id)
-}
-
-func (q *workq) insertNew(id int) {
-	q.lastWasMark = false
-	q.s.insertNew(id)
-}
-
-func (q *workq) elements() []int { // should be []stateInst. Should we convert sparseset to use stateInst instead of int??
-	return q.s.dense
-}
 
 // -----------------------------------------------------------------------------
 // search params
@@ -265,48 +36,6 @@ type searchParams struct {
 	ep                int  // "out" parameter: end pointer for match
 
 	matches []int
-}
-
-// -----------------------------------------------------------------------------
-// state set... don't know how to do this right...
-// TODO(matloob): implement stateset properly!
-
-type stateSet struct {
-	states []*State
-}
-
-// inst, flag, next
-
-func (s *stateSet) find(state *State) *State {
-loop:
-	for i := range s.states {
-		if len(s.states[i].inst) != len(state.inst) {
-			continue
-		}
-		for j := range state.inst {
-			if s.states[i].inst[j] != state.inst[j] {
-				continue loop
-			}
-		}
-		if s.states[i].flag != state.flag {
-			continue
-		}
-		return s.states[i]
-	}
-	return nil
-}
-
-func (s *stateSet) size() int {
-	return len(s.states)
-}
-
-func (s *stateSet) insert(state *State) {
-	s.states = append(s.states, state)
-}
-
-type startInfo struct {
-	start *State
-	firstbyte int64
 }
 
 // -----------------------------------------------------------------------------
@@ -774,7 +503,7 @@ func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 	sawmatch := false    // whether queue contains guaranteed InstMatch
 	sawmark := false     // whether queue contains a mark
 	if DebugDFA {
-		DebugPrintf("WorkqToCachedState %s [%x]", dumpWorkq(q), flags)
+		DebugPrintf("WorkqToCachedState %s [%x]", q.dump(), flags)
 	}
 	for i, id := range q.elements() {
 		if sawmatch && (d.kind == firstMatch || q.isMark(id)) {
@@ -1077,26 +806,11 @@ func (d *DFA) runWorkqOnRune(oldq *workq, newq *workq, r rune, flag flag, ismatc
 
 	if DebugDFA {
 		DebugPrintf("%s on %d[%x] -> %s [%v]\n",
-			dumpWorkq(oldq), r, flag, dumpWorkq(newq), *ismatch)
+			oldq.dump(), r, flag, newq.dump(), *ismatch)
 	}
 
 }
 
-func dumpWorkq(q *workq) string {
-	var buf bytes.Buffer
-	sep := ""
-	for _, v := range q.elements() {
-		if q.isMark(v) {
-			buf.WriteString("|")
-			sep = ""
-		} else {
-			buf.WriteString(sep)
-			buf.WriteString(strconv.Itoa(v))
-			sep = ","
-		}
-	}
-	return buf.String()
-}
 
 //////////////////////////////////////////////////////////////////////
 //
