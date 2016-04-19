@@ -1,6 +1,3 @@
-// Copyright 2016 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
 
 package dfa
 
@@ -8,8 +5,8 @@ import (
 	"errors"
 	"sort"
 	"sync"
+	"fmt"
 	"sync/atomic"
-	"unicode"
 	"matloob.io/regexp/internal/input"
 	"matloob.io/regexp/syntax"
 )
@@ -42,17 +39,15 @@ type DFA struct {
 	cacheMu     sync.Mutex
 	memBudget   int64
 	stateBudget int64 // is this used?
-	bytemap     []int
+	rangemap rangeMap
 	stateCache  stateSet
 	start       [maxStart]startInfo
-
-	divides []rune
 }
 
 func newDFA(prog *syntax.Prog, kind matchKind, maxMem int64) *DFA {
 	d := new(DFA)
 	d.prog = prog
-	d.computeByteMap()
+	d.rangemap.init(prog)
 	d.kind = kind
 	d.startUnanchored = prog.StartUnanchored
 	d.memBudget = maxMem
@@ -94,12 +89,13 @@ func reverse(i input.Input) input.Rinput {
 
 func (d *DFA) loadNextState(from *State, r rune) *State {
 	// TODO(matloob): Atomize this once *States are indexes into state array...
-	return from.next[d.byteMap(r)]
+	fmt.Println("fromnext:", len(from.next))
+	return from.next[d.rangemap.lookup(r)]
 }
 
 func (d *DFA) storeNextState(from *State, r rune, to *State) {
 	// TODO(matloob): Atomize this once *States are indexes into state array...
-	from.next[d.byteMap(r)] = to
+	from.next[d.rangemap.lookup(r)] = to
 }
 
 func (d *DFA) analyzeSearch(params *searchParams) bool {
@@ -205,134 +201,6 @@ func (d *DFA) runStateOnRuneUnlocked(state *State, r rune) *State {
 	return d.runStateOnRune(state, r)
 }
 
-// Looks up bytes in d.bytemap but handles case c == kByteEndText too.
-func (d *DFA) byteMap(r rune) int {
-	// Use the trivial byte map for now...
-	// See ComputeByteMap
-	if r == input.EndOfText {
-		return len(d.divides)
-	}
-	if r == input.StartOfText {
-		return len(d.divides) + 1
-	}
-	if r > 255 {
-		lo, hi := 0, len(d.divides)
-		for {
-			// search d.divides
-			center := (lo + hi) / 2
-			if center == lo {
-				return lo
-			}
-			divcenter := d.divides[center]
-			if r >= divcenter {
-				lo = center
-			} else {
-				hi = center
-			}
-		}
-	}
-	return d.bytemap[int(r)]
-}
-
-func (d *DFA) computeByteMap() {
-	divides := make(map[rune]bool)
-	for _, inst := range d.prog.Inst {
-		switch inst.Op {
-		case syntax.InstRune:
-			if len(inst.Rune) == 1 {
-				r0 := inst.Rune[0]
-				divides[r0] = true
-				divides[r0+1] = true
-				if syntax.Flags(inst.Arg)&syntax.FoldCase != 0 {
-					for r1 := unicode.SimpleFold(r0); r1 != r0; r1 = unicode.SimpleFold(r1) {
-
-						divides[r1] = true
-
-						divides[r1+1] = true
-					}
-				}
-				break
-			} else {
-				for i := 0; i < len(inst.Rune); i += 2 {
-					divides[inst.Rune[i]] = true
-					divides[inst.Rune[i+1]+1] = true
-					if syntax.Flags(inst.Arg)&syntax.FoldCase != 0 {
-						rl := inst.Rune[i]
-						rh := inst.Rune[i+1]
-						for r0 := rl; r0 <= rh; r0++ {
-							// range mapping doesn't commute...
-							for r1 := unicode.SimpleFold(r0); r1 != r0; r1 = unicode.SimpleFold(r1) {
-								divides[r1] = true
-
-								divides[r1+1] = true
-							}
-						}
-					}
-				}
-			}
-
-		case syntax.InstRune1:
-			r0 := inst.Rune[0]
-			divides[r0] = true
-			divides[r0+1] = true
-			if syntax.Flags(inst.Arg)&syntax.FoldCase != 0 {
-				for r1 := unicode.SimpleFold(r0); r1 != r0; r1 = unicode.SimpleFold(r1) {
-					divides[r1] = true
-					divides[r1+1] = true
-				}
-			}
-		case syntax.InstRuneAnyNotNL:
-			divides['\n'] = true
-			divides['\n'+1] = true
-
-		case syntax.InstEmptyWidth:
-			switch syntax.EmptyOp(inst.Arg) {
-			case syntax.EmptyBeginLine, syntax.EmptyEndLine:
-				divides['\n'] = true
-				divides['\n'+1] = true
-			case syntax.EmptyWordBoundary, syntax.EmptyNoWordBoundary:
-				// can we turn this into an InstRune?
-				divides['A'] = true
-				divides['Z'+1] = true
-				divides['a'] = true
-				divides['z'+1] = true
-				divides['0'] = true
-				divides['9'+1] = true
-				divides['_'] = true
-				divides['_'+1] = true
-			}
-		}
-	}
-
-	divl := make([]rune, 0, len(divides))
-	divl = append(divl, -1)
-	for r := range divides {
-		divl = append(divl, r)
-	}
-	runeSlice(divl).Sort()
-	d.divides = divl
-	d.bytemap = make([]int, 256)
-	k := 0
-	for i := range d.bytemap {
-		if divides[rune(i)] {
-			k++
-		}
-		d.bytemap[i] = k
-	}
-}
-
-// runeSlice exists to permit sorting the case-folded rune sets.
-type runeSlice []rune
-
-func (p runeSlice) Len() int           { return len(p) }
-func (p runeSlice) Less(i, j int) bool { return p[i] < p[j] }
-func (p runeSlice) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
-
-// Sort is a convenience method.
-func (p runeSlice) Sort() {
-	sort.Sort(p)
-}
-
 // Processes input rune r in state, returning new state.
 func (d *DFA) runStateOnRune(state *State, r rune) *State {
 	if isSpecialState(state) {
@@ -354,7 +222,7 @@ func (d *DFA) runStateOnRune(state *State, r rune) *State {
 
 	// If someone else already computed this, return it.
 	var ns *State
-	if !(d.byteMap(r) < len(state.next)) {
+	if !(d.rangemap.lookup(r) < len(state.next)) {
 		// TODO(matloob): return this as an error?
 		panic(errors.New("byte range index is greater than number out arrows from state"))
 	}
@@ -610,7 +478,7 @@ func (d *DFA) cachedState(ids []int, flags flag) *State {
 	// Allocate new state, along with room for next and inst.
 	// TODO(matloob): this code does a bunch of UNSAFE stuff...
 
-	nextsize := len(d.divides) + 2
+	nextsize := d.rangemap.count()
 	state := d.stateCache.insert(ids, flags, nextsize)
 	if DebugDFA {
 		DebugPrintf(" -> %s\n", state.Dump())
