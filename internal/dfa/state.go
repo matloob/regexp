@@ -11,7 +11,6 @@ import (
 	"strconv"
 )
 
-
 // just use ints instead of stateinst??
 type stateInst int
 
@@ -30,14 +29,14 @@ type State struct {
 }
 
 func (s *State) isMatch() bool {
-	return s.flag & flagMatch != 0
+	return s.flag&flagMatch != 0
 }
 
 type flag uint32
 
 var (
 	flagEmptyMask = flag(0xFFF)
-	flagMatch   = flag(0x1000)
+	flagMatch     = flag(0x1000)
 	flagLastWord  = flag(0x2000)
 	flagNeedShift = flag(16)
 )
@@ -52,11 +51,11 @@ const (
 const (
 	// Indices into start for unanchored searches.
 	// Add startAnchored for anchored searches.
-	startBeginText        = 0
-	startBeginLine        = 2
+	startBeginText       = 0
+	startBeginLine       = 2
 	startWordBoundary    = 4
 	startNonWordBoundary = 6
-	maxStart              = 8
+	maxStart             = 8
 
 	kStartAnchored = 1
 )
@@ -106,12 +105,12 @@ func (s *State) Dump() string {
 
 type stateSet struct {
 	states []State
-	
+
 	instpool []int
-	instpos int
-	
+	instpos  int
+
 	nextpool []*State
-	nextpos int
+	nextpos  int
 }
 
 // inst, flag, next
@@ -121,10 +120,10 @@ func (s *stateSet) init(budget int) {
 	s.states = make([]State, 0, 1000)
 
 	s.instpool = make([]int, 0, 5000)
-	s.instpos= 0
+	s.instpos = 0
 	s.nextpool = make([]*State, 0, 5000)
 	s.nextpos = 0
-	
+
 }
 
 // clear clears the state cache. Must hold the DFA's cache mutex to call clear.
@@ -158,38 +157,45 @@ func (s *stateSet) size() int {
 }
 
 func (s *stateSet) insert(inst []int, flag flag, nextsize int) *State {
+	if len(s.states)+1 > cap(s.states) ||
+		s.instpos+len(inst) > cap(s.instpool) ||
+		s.nextpos+nextsize > cap(s.nextpool) {
+		// state cache is full
+		return nil
+	}
+
 	// TODO(matloob): can we insert?
 	i := len(s.states)
 	s.states = s.states[:i+1]
 	state := &s.states[i]
-	
+
 	instsize := len(inst)
-	state.inst = s.instpool[s.instpos:s.instpos+instsize]
+	state.inst = s.instpool[s.instpos : s.instpos+instsize]
 	s.instpos += instsize
 	copy(state.inst, inst)
-	
+
 	state.flag = flag
-	
-	state.next = s.nextpool[s.nextpos:s.nextpos+nextsize]
+
+	state.next = s.nextpool[s.nextpos : s.nextpos+nextsize]
 	s.nextpos += nextsize
 	for i := range state.next {
 		state.next[i] = nil
 	}
-	
+
 	return state
 }
 
 type startInfo struct {
-	start *State
+	start     *State
 	firstbyte int64
 }
 
 type stateSaver struct {
-	dfa *DFA
-	inst []int
-	flag flag
+	dfa       *DFA
+	inst      []int
+	flag      flag
 	isSpecial bool
-	special *State // if it's a special state special != nil
+	special   *State // if it's a special state special != nil
 }
 
 func (s *stateSaver) Save(dfa *DFA, state *State) {
@@ -202,7 +208,7 @@ func (s *stateSaver) Save(dfa *DFA, state *State) {
 	}
 	s.isSpecial = false
 	s.flag = state.flag
-	
+
 	s.inst = s.inst[:0]
 	s.inst = append(s.inst, state.inst...)
 }

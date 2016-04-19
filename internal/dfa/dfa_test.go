@@ -33,11 +33,11 @@ func matchDFA2(regexp string, inputstr string, longest bool) (int, int, bool, er
 		panic("failed to compile reverse prog")
 	}
 
-	reversed := newReverseDFA(revprog, longestMatch, 0)
+	reversed := newDFA(revprog, longestMatch, 0)
 
 	var i input.InputString
 	i.Reset(inputstr)
-	j, k, b, err := d.search(&i, 0, reversed)
+	j, k, b, err := search(d, reversed, &i, 0)
 	return j, k, b, err
 }
 

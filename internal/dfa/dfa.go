@@ -6,40 +6,17 @@ package dfa
 
 import (
 	"errors"
-	"math"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"unicode"
-
 	"matloob.io/regexp/internal/input"
 	"matloob.io/regexp/syntax"
 )
 
 const DebugDFA = false
+
 var DebugPrintf = func(format string, a ...interface{}) {}
-
-
-// -----------------------------------------------------------------------------
-// search params
-
-type searchParams struct {
-	input input.Input // StringPiece
-	rinput input.Rinput
-	startpos int
-	anchored          bool
-	wantEarliestMatch bool
-	runForward        bool
-	start             *State
-	firstbyte         int64 // int64 to be compatible with atomic ops
-	failed            bool // "out" parameter: whether search gave up
-	ep                int  // "out" parameter: end pointer for match
-
-	matches []int
-}
-
-// -----------------------------------------------------------------------------
-// DFA
 
 type matchKind int
 
@@ -51,12 +28,12 @@ const (
 
 type DFA struct {
 	// Constant after initialization.
-	prefixer input.Prefixer // TODO(matloob): this isn't set yet...
+	prefixer        input.Prefixer // TODO(matloob): this isn't set yet...
 	prog            *syntax.Prog
 	kind            matchKind // kind of DFA
-	startUnanchored int    
+	startUnanchored int
 
-	mu sync.Mutex // what does this mean: "mutex_ >= cache_mutex.r"
+	mu sync.Mutex
 
 	//  Scratch areas, protected by mu
 	q0, q1 *workq
@@ -67,11 +44,8 @@ type DFA struct {
 	stateBudget int64 // is this used?
 	bytemap     []int
 	stateCache  stateSet
-	start       [maxStart]startInfo // should this be a slice?
-	
-	
-	// TODO(matloob): removeme
-	reverse bool // is this a reverse DFA?
+	start       [maxStart]startInfo
+
 	divides []rune
 }
 
@@ -109,61 +83,7 @@ func newDFA(prog *syntax.Prog, kind matchKind, maxMem int64) *DFA {
 	return d
 }
 
-func newReverseDFA(prog *syntax.Prog, kind matchKind, maxMem int64) *DFA {
-	d := newDFA(prog, kind, maxMem)
-	d.reverse = true
-	return d
-}
-
 var errFallBack = errors.New("falling back to NFA")
-
-func (d *DFA) search(i input.Input, startpos int, reversed *DFA) (start int, end int, matched bool, err error) {
-	defer func() {
-/*		if r := recover(); r != nil {
-			if rerr, ok := r.(error); ok {
-				err = rerr
-			}
-			err = errors.New("panicked in RE execution")
-		}*/
-	}()
-	params := searchParams{}
-	params.startpos = startpos
-	params.wantEarliestMatch = false
-	params.input = i
-	params.runForward = true
-	params.ep = int(math.MaxInt64)
-	if !d.analyzeSearch(&params) {
-		return -1, -1, false, errors.New("analyze search failed on forward DFA")
-	}
-	b := d.searchLoop(&params)
-	if params.failed {
-		return -1, -1, false, errFallBack
-	}
-	if !b  {
-		return -1, -1, false, nil
-	}
-	end = params.ep
-
-	params = searchParams{}
-	params.startpos = startpos
-	params.ep = end
-	params.anchored = true
-	// params.wantEarliestMatch = true
-	params.input = i
-	params.rinput= reverse(i)
-	params.runForward = false
-	if !reversed.analyzeSearch(&params) {
-		return -2, -2, false, errors.New("analyze search failed on reverse DFA")
-	}
-	b = reversed.searchLoop(&params)
-	if DebugDFA {
-		DebugPrintf("\nkind %d\n%v\n", d.kind, d.prog)
-	}
-	if params.failed {
-		return -1, -1, false, errFallBack
-	}
-	return params.ep, end, b, nil
-}
 
 func reverse(i input.Input) input.Rinput {
 	if ri, ok := i.(input.Rinput); ok {
@@ -192,28 +112,28 @@ func (d *DFA) analyzeSearch(params *searchParams) bool {
 	var start int
 	var flags flag
 	if params.runForward {
-		flags =  flag(input.Context(params.startpos))
-		if flags & flag(syntax.EmptyBeginText) == 0 {
-			if  r, _ := reverse(input).Rstep(params.startpos); syntax.IsWordChar(r) {
+		flags = flag(input.Context(params.startpos))
+		if flags&flag(syntax.EmptyBeginText) == 0 {
+			if r, _ := reverse(input).Rstep(params.startpos); syntax.IsWordChar(r) {
 				flags |= flagLastWord
 			}
 		}
 	} else {
 		flags = flag(params.rinput.Context(params.ep))
 		// reverse the flag -- do this a nicer way!
-		flags = flag(int(flags) & ^0xF) |((flags & 0xA) >> 1) | ((flags & 0x5) << 1)
-		if flags & flag(syntax.EmptyBeginText) == 0 {
-			if  r, _ := params.input.Step(params.ep); syntax.IsWordChar(r) {
+		flags = flag(int(flags) & ^0xF) | ((flags & 0xA) >> 1) | ((flags & 0x5) << 1)
+		if flags&flag(syntax.EmptyBeginText) == 0 {
+			if r, _ := params.input.Step(params.ep); syntax.IsWordChar(r) {
 				flags |= flagLastWord
 			}
 		}
 	}
 
-	if flags & flag(syntax.EmptyBeginText) != 0{
+	if flags&flag(syntax.EmptyBeginText) != 0 {
 		start |= startBeginText
-	} else if flags & flag(syntax.EmptyBeginLine) != 0 {
+	} else if flags&flag(syntax.EmptyBeginLine) != 0 {
 		start |= startBeginLine
-	} else if flags & flag(syntax.EmptyWordBoundary) != 0 {
+	} else if flags&flag(syntax.EmptyWordBoundary) != 0 {
 		start |= startWordBoundary
 	} else {
 		start |= startNonWordBoundary
@@ -279,7 +199,7 @@ func (d *DFA) analyzeSearchHelper(params *searchParams, info *startInfo, flags f
 
 // Processes input rune r in state, returning new state.
 // Caller does not hold mutex.
-func (d *DFA) runStateOnRuneUnlocked(state *State,  r rune) *State {
+func (d *DFA) runStateOnRuneUnlocked(state *State, r rune) *State {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.runStateOnRune(state, r)
@@ -290,7 +210,7 @@ func (d *DFA) byteMap(r rune) int {
 	// Use the trivial byte map for now...
 	// See ComputeByteMap
 	if r == input.EndOfText {
-		return len(d.divides);
+		return len(d.divides)
 	}
 	if r == input.StartOfText {
 		return len(d.divides) + 1
@@ -299,7 +219,7 @@ func (d *DFA) byteMap(r rune) int {
 		lo, hi := 0, len(d.divides)
 		for {
 			// search d.divides
-			center := (lo+hi)/2
+			center := (lo + hi) / 2
 			if center == lo {
 				return lo
 			}
@@ -320,30 +240,30 @@ func (d *DFA) computeByteMap() {
 		switch inst.Op {
 		case syntax.InstRune:
 			if len(inst.Rune) == 1 {
-				r0 :=inst.Rune[0]
+				r0 := inst.Rune[0]
 				divides[r0] = true
 				divides[r0+1] = true
 				if syntax.Flags(inst.Arg)&syntax.FoldCase != 0 {
 					for r1 := unicode.SimpleFold(r0); r1 != r0; r1 = unicode.SimpleFold(r1) {
-									
+
 						divides[r1] = true
-						
+
 						divides[r1+1] = true
 					}
 				}
 				break
-			} else {		
+			} else {
 				for i := 0; i < len(inst.Rune); i += 2 {
 					divides[inst.Rune[i]] = true
-					divides[inst.Rune[i+1] +1] = true
+					divides[inst.Rune[i+1]+1] = true
 					if syntax.Flags(inst.Arg)&syntax.FoldCase != 0 {
 						rl := inst.Rune[i]
-						rh:=inst.Rune[i+1]
+						rh := inst.Rune[i+1]
 						for r0 := rl; r0 <= rh; r0++ {
 							// range mapping doesn't commute...
 							for r1 := unicode.SimpleFold(r0); r1 != r0; r1 = unicode.SimpleFold(r1) {
 								divides[r1] = true
-						
+
 								divides[r1+1] = true
 							}
 						}
@@ -354,39 +274,37 @@ func (d *DFA) computeByteMap() {
 		case syntax.InstRune1:
 			r0 := inst.Rune[0]
 			divides[r0] = true
-			divides[r0 + 1]  = true
+			divides[r0+1] = true
 			if syntax.Flags(inst.Arg)&syntax.FoldCase != 0 {
 				for r1 := unicode.SimpleFold(r0); r1 != r0; r1 = unicode.SimpleFold(r1) {
 					divides[r1] = true
 					divides[r1+1] = true
 				}
 			}
-		case syntax.InstRuneAnyNotNL: 
+		case syntax.InstRuneAnyNotNL:
 			divides['\n'] = true
 			divides['\n'+1] = true
-		
-		
-		case syntax.InstEmptyWidth: 
+
+		case syntax.InstEmptyWidth:
 			switch syntax.EmptyOp(inst.Arg) {
-				case syntax.EmptyBeginLine, syntax.EmptyEndLine:
-					divides['\n'] = true
-					divides['\n'+1] = true
-				case syntax.EmptyWordBoundary, syntax.EmptyNoWordBoundary:
-					// can we turn this into an InstRune?
-					divides['A'] = true
-					divides['Z'+1] = true
-					divides['a'] = true
-					divides['z' + 1] = true
-					divides['0'] = true
-					divides['9'+1] = true
-					divides['_'] = true
-					divides['_'+1] = true
+			case syntax.EmptyBeginLine, syntax.EmptyEndLine:
+				divides['\n'] = true
+				divides['\n'+1] = true
+			case syntax.EmptyWordBoundary, syntax.EmptyNoWordBoundary:
+				// can we turn this into an InstRune?
+				divides['A'] = true
+				divides['Z'+1] = true
+				divides['a'] = true
+				divides['z'+1] = true
+				divides['0'] = true
+				divides['9'+1] = true
+				divides['_'] = true
+				divides['_'+1] = true
 			}
 		}
 	}
 
-	
-	divl := make([]rune, 0,len(divides))
+	divl := make([]rune, 0, len(divides))
 	divl = append(divl, -1)
 	for r := range divides {
 		divl = append(divl, r)
@@ -400,7 +318,7 @@ func (d *DFA) computeByteMap() {
 			k++
 		}
 		d.bytemap[i] = k
-	} 
+	}
 }
 
 // runeSlice exists to permit sorting the case-folded rune sets.
@@ -414,7 +332,6 @@ func (p runeSlice) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
 func (p runeSlice) Sort() {
 	sort.Sort(p)
 }
-
 
 // Processes input rune r in state, returning new state.
 func (d *DFA) runStateOnRune(state *State, r rune) *State {
@@ -447,12 +364,12 @@ func (d *DFA) runStateOnRune(state *State, r rune) *State {
 	}
 	// Convert state to workq.
 	d.stateToWorkq(state, d.q0)
- 
+
 	// Flags marking the kinds of empty-width things (^ $ etc)
 	// around this byte.  Before the byte we have the flags recorded
 	// in the State structure itself.  After the byte we have
 	// nothing yet (but that will change: read on).
-	needflag := state.flag >> flagNeedShift 
+	needflag := state.flag >> flagNeedShift
 	beforeflag := state.flag & flagEmptyMask
 	oldbeforeflag := beforeflag
 	afterflag := flag(0)
@@ -464,11 +381,11 @@ func (d *DFA) runStateOnRune(state *State, r rune) *State {
 	}
 
 	if r == input.EndOfText {
-	// Insert implicit $ and \z before the fake "end text" byte.
+		// Insert implicit $ and \z before the fake "end text" byte.
 		beforeflag |= flag(syntax.EmptyEndLine) | flag(syntax.EmptyEndText)
 	} else if r == input.StartOfText {
-		beforeflag |= flag(syntax.EmptyBeginLine) | flag(syntax.EmptyBeginText)	
-	}	
+		beforeflag |= flag(syntax.EmptyBeginLine) | flag(syntax.EmptyBeginText)
+	}
 
 	// The state flag flagLastWord says whether the last
 	// byte processed was a word character.  Use that info to
@@ -480,7 +397,6 @@ func (d *DFA) runStateOnRune(state *State, r rune) *State {
 	} else {
 		beforeflag |= flag(syntax.EmptyWordBoundary)
 	}
-	
 
 	// Okay, finally ready to run.
 	// Only useful to rerun on empty string if there are new, useful flags.
@@ -549,7 +465,7 @@ func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 		if q.isMark(id) {
 			if n > 0 && ids[n-1] != int(mark) {
 				sawmark = true
-				ids[n] = int(mark) 
+				ids[n] = int(mark)
 				n++
 			}
 			continue
@@ -694,13 +610,12 @@ func (d *DFA) cachedState(ids []int, flags flag) *State {
 	// Allocate new state, along with room for next and inst.
 	// TODO(matloob): this code does a bunch of UNSAFE stuff...
 
-
-	nextsize := len(d.divides)+2
+	nextsize := len(d.divides) + 2
 	state := d.stateCache.insert(ids, flags, nextsize)
 	if DebugDFA {
-		DebugPrintf(" -> %s\n",  state.Dump())
+		DebugPrintf(" -> %s\n", state.Dump())
 	}
-	
+
 	return state
 }
 
@@ -848,7 +763,6 @@ func (d *DFA) runWorkqOnRune(oldq *workq, newq *workq, r rune, flag flag, ismatc
 
 }
 
-
 //////////////////////////////////////////////////////////////////////
 //
 // DFA execution.
@@ -923,13 +837,13 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 	runForward := params.runForward
 
 	start := params.start
-	bp := 0 // start of text
-	p := params.startpos  // text scanning point
+	bp := 0              // start of text
+	p := params.startpos // text scanning point
 	ep := params.ep
 	resetp := -1
 	if !runForward {
-		p, ep = ep, p 
-	} 
+		p, ep = ep, p
+	}
 
 	var saveS, saveStart stateSaver
 
@@ -938,7 +852,7 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 	matched := false
 	s := start
 
-	if s.isMatch() { 
+	if s.isMatch() {
 		matched = true
 		lastMatch = p
 		if wantEarliestMatch {
@@ -950,7 +864,7 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 	var w int
 	for p != ep {
 		if DebugDFA {
-			DebugPrintf("@%d: %s\n", p - bp, s.Dump())
+			DebugPrintf("@%d: %s\n", p-bp, s.Dump())
 		}
 		if haveFirstbyte && s == start {
 			// TODO(matloob): Correct the comment
@@ -982,7 +896,7 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 			r, w = params.rinput.Rstep(p)
 			p -= w
 		}
-		if r == input.EndOfText  {
+		if r == input.EndOfText {
 			break
 		}
 
@@ -1013,19 +927,19 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 				// same at about 2 MB/s.  Unless we're processing an average
 				// of 10 bytes per state computation, fail so that RE2 can
 				// fall back to the NFA.
-				if p >= 0 && p - resetp < 10*d.stateCache.size() {
+				if p >= 0 && p-resetp < 10*d.stateCache.size() {
 					params.failed = true
 					return false
 				}
 				resetp = p
-				
+
 				// Prepare to save start and s across the reset.
 				saveStart.Save(d, start)
 				saveS.Save(d, s)
 
 				// Discard all the States in the cache.
 				d.resetCache()
-				 
+
 				// Restore start and s so we can continue.
 				if start, s := saveStart.Restore(), saveS.Restore(); start == nil || s == nil {
 					params.failed = true
@@ -1035,11 +949,11 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 				if ns == nil {
 					params.failed = true
 					return false
-				}	  
+				}
 			}
-	
+
 		}
-	
+
 		//  if (ns <= SpecialStateMax) {
 		if isSpecialState(ns) {
 			if ns == deadState {
@@ -1050,8 +964,8 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 			return true
 		}
 		s = ns
-	
-		if s.isMatch(){
+
+		if s.isMatch() {
 			matched = true
 			// The DFA notices the match one rune late,
 			// so adjust p before using it in the match.
@@ -1061,7 +975,7 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 				lastMatch = p + w
 			}
 			if DebugDFA {
-				DebugPrintf("match @%d! [%s]\n", lastMatch - bp, s.Dump())
+				DebugPrintf("match @%d! [%s]\n", lastMatch-bp, s.Dump())
 			}
 			if wantEarliestMatch {
 				params.ep = lastMatch
@@ -1110,7 +1024,7 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 			for i := range s.inst {
 				inst := d.prog.Inst[s.inst[i]]
 				if inst.Op == syntax.InstMatch {
-					v = append(v, 0 /* inst.matchID() */ ) // TODO(matloob): match id?
+					v = append(v, 0 /* inst.matchID() */) // TODO(matloob): match id?
 				}
 			}
 			params.matches = v
@@ -1122,12 +1036,12 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 
 func (d *DFA) resetCache() {
 	d.cacheMu.Lock()
-	
+
 	for i := range d.start {
 		d.start[i].start = nil
 		atomic.StoreInt64(&d.start[i].firstbyte, fbUnknown)
 	}
 	d.stateCache.clear()
-	
+
 	d.cacheMu.Unlock()
 }
