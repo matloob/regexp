@@ -21,7 +21,8 @@ func (s *Searcher) Init(prog *syntax.Prog, expr string) {
 var errNotDFA = errors.New("can't use dfa")
 
 func (s *Searcher) Search(i input.Input, pos int, longest bool, matchcap *[]int, ncap int) (bool, error) {
-	if reverse(i) == nil {
+	rinput, ok := i.(input.Rinput)
+	if !ok {
 		return false, errNotDFA
 	}
 	var dfa *DFA
@@ -52,7 +53,7 @@ func (s *Searcher) Search(i input.Input, pos int, longest bool, matchcap *[]int,
 	}
 	var matched bool
 	*matchcap = (*matchcap)[:ncap]
-	p, ep, matched, err := search(dfa, s.revdfa, i, pos)
+	p, ep, matched, err := search(dfa, s.revdfa, rinput, pos)
 	if err != nil {
 		return false, errNotDFA
 	}
@@ -63,8 +64,7 @@ func (s *Searcher) Search(i input.Input, pos int, longest bool, matchcap *[]int,
 }
 
 type searchParams struct {
-	input             input.Input // StringPiece
-	rinput            input.Rinput
+	input            input.Rinput
 	startpos          int
 	anchored          bool
 	wantEarliestMatch bool
@@ -77,7 +77,7 @@ type searchParams struct {
 	matches []int
 }
 
-func search(d, reversed *DFA, i input.Input, startpos int) (start int, end int, matched bool, err error) {
+func search(d, reversed *DFA, i input.Rinput, startpos int) (start int, end int, matched bool, err error) {
 	params := searchParams{}
 	params.startpos = startpos
 	params.wantEarliestMatch = false
@@ -100,9 +100,7 @@ func search(d, reversed *DFA, i input.Input, startpos int) (start int, end int, 
 	params.startpos = startpos
 	params.ep = end
 	params.anchored = true
-	// params.wantEarliestMatch = true
 	params.input = i
-	params.rinput = reverse(i)
 	params.runForward = false
 	if !reversed.analyzeSearch(&params) {
 		return -2, -2, false, errors.New("analyze search failed on reverse DFA")
