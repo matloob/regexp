@@ -5,7 +5,6 @@
 package dfa
 
 import (
-	"fmt"
 	"sort"
 	"unicode"
 	"matloob.io/regexp/internal/input"
@@ -17,13 +16,10 @@ type rangeMap struct {
 	divides []rune
 }
 
-// Looks up bytes in d.bytemap but handles case c == kByteEndText too.
 func (rm *rangeMap) lookup(r rune) int {
-	fmt.Println(r)
 	// Use the trivial byte map for now...
 	// See ComputeByteMap
 	if r == input.EndOfText {
-		fmt.Println("end of text", len(rm.divides))
 		return len(rm.divides)
 	}
 	if r == input.StartOfText {

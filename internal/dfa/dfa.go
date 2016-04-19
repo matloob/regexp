@@ -104,7 +104,7 @@ func (d *DFA) analyzeSearch(params *searchParams) bool {
 		}
 	} else {
 		flags = flag(params.input.Context(params.ep))
-		// reverse the flag -- do this a nicer way!
+		// reverse the flag
 		flags = flag(int(flags) & ^0xF) | ((flags & 0xA) >> 1) | ((flags & 0x5) << 1)
 		if flags&flag(syntax.EmptyBeginText) == 0 {
 			if r, _ := params.input.Step(params.ep); syntax.IsWordChar(r) {
