@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Package dfa implements a caching DFA regexp matcher.
 package dfa
 
 import (
@@ -22,7 +23,6 @@ type matchKind int
 const (
 	firstMatch matchKind = iota
 	longestMatch
-	manyMatch
 )
 
 type DFA struct {
@@ -264,14 +264,8 @@ func (d *DFA) runStateOnRune(state *State, r rune) *State {
 	d.runWorkqOnRune(d.q0, d.q1, r, afterflag, &ismatch, d.kind)
 
 	// Most of the time, we build the state from the output of
-	// RunWorkqOnByte, so swap q0_ and q1_ here.  However, so that
-	// RE2::Set can tell exactly which match instructions
-	// contributed to the match, don't swap if c is kByteEndText.
-	// The resulting state wouldn't be correct for further processing
-	// of the string, but we're at the end of the text so that's okay.
-	// Leaving q0_ alone preseves the match instructions that led to
-	// the current setting of ismatch.
-	if r != input.EndOfText || d.kind != manyMatch {
+	// RunWorkqOnByte, so swap q0_ and q1_ here.
+	if r != input.EndOfText {
 		d.q0, d.q1 = d.q1, d.q0
 	}
 
@@ -356,7 +350,6 @@ func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 		// but in fact the correct leftmost-first match is the leading "" (0,0).
 
 	}
-	// DCHECK_LE(n, q.size())
 	if n > 0 && ids[n-1] == int(mark) {
 		n--
 	}
@@ -424,7 +417,7 @@ func (d *DFA) workqToCachedState(q *workq, flags flag) *State {
 
 // ids is a list of indexes into prog.Inst
 func (d *DFA) cachedState(ids []int, flags flag) *State {
-	// if DEBUG_MODE { d.mu.assertHeld() }
+	// d.mu should be locked
 
 	// Look in the cache for a pre-existing state.
 	f := d.stateCache.find(ids, flags)
@@ -753,7 +746,6 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 		if ns == nil {
 			ns = d.runStateOnRuneUnlocked(s, r)
 			if ns == nil {
-				panic("state saving stuff not implemented")
 				// After we reset the cache, we hold cache_mutex exclusively,
 				// so if resetp != NULL, it means we filled the DFA state
 				// cache with this search alone (without any other threads).
@@ -851,19 +843,6 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 	}
 	if !isSpecialState(s) && s.isMatch() {
 		matched = true
-		lastMatch = p
-		// TODO(matloob): Just remove this? Do we support ManyMatch?
-		if params.matches != nil && false /* && d.kind == ManyMatch */ {
-			v := params.matches
-			v = v[:0] // TODO(matloob): just operate on params.matches?
-			for i := range s.inst {
-				inst := d.prog.Inst[s.inst[i]]
-				if inst.Op == syntax.InstMatch {
-					v = append(v, 0 /* inst.matchID() */) // TODO(matloob): match id?
-				}
-			}
-			params.matches = v
-		}
 	}
 	params.ep = lastMatch
 	return matched
