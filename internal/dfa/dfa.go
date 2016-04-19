@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package regexp
+package dfa
 
 import (
 	"errors"
@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"unicode"
 
+	"matloob.io/regexp/internal/input"
 	"matloob.io/regexp/syntax"
 )
 
@@ -23,8 +24,8 @@ var DebugPrintf = func(format string, a ...interface{}) {}
 // search params
 
 type searchParams struct {
-	input input // StringPiece
-	rinput rinput
+	input input.Input // StringPiece
+	rinput input.Rinput
 	startpos int
 	anchored          bool
 	wantEarliestMatch bool
@@ -50,7 +51,7 @@ const (
 
 type DFA struct {
 	// Constant after initialization.
-	regexp *Regexp // TODO(matloob): this isn't set yet...
+	prefixer input.Prefixer // TODO(matloob): this isn't set yet...
 	prog            *syntax.Prog
 	kind            matchKind // kind of DFA
 	startUnanchored int    
@@ -116,7 +117,7 @@ func newReverseDFA(prog *syntax.Prog, kind matchKind, maxMem int64) *DFA {
 
 var errFallBack = errors.New("falling back to NFA")
 
-func (d *DFA) search(i input, startpos int, reversed *DFA) (start int, end int, matched bool, err error) {
+func (d *DFA) search(i input.Input, startpos int, reversed *DFA) (start int, end int, matched bool, err error) {
 	defer func() {
 /*		if r := recover(); r != nil {
 			if rerr, ok := r.(error); ok {
@@ -164,6 +165,13 @@ func (d *DFA) search(i input, startpos int, reversed *DFA) (start int, end int, 
 	return params.ep, end, b, nil
 }
 
+func reverse(i input.Input) input.Rinput {
+	if ri, ok := i.(input.Rinput); ok {
+		return ri
+	}
+	return nil
+}
+
 func (d *DFA) loadNextState(from *State, r rune) *State {
 	// TODO(matloob): Atomize this once *States are indexes into state array...
 	return from.next[d.byteMap(r)]
@@ -184,18 +192,18 @@ func (d *DFA) analyzeSearch(params *searchParams) bool {
 	var start int
 	var flags flag
 	if params.runForward {
-		flags =  flag(input.context(params.startpos))
+		flags =  flag(input.Context(params.startpos))
 		if flags & flag(syntax.EmptyBeginText) == 0 {
-			if  r, _ := reverse(input).rstep(params.startpos); syntax.IsWordChar(r) {
+			if  r, _ := reverse(input).Rstep(params.startpos); syntax.IsWordChar(r) {
 				flags |= flagLastWord
 			}
 		}
 	} else {
-		flags = flag(params.rinput.context(params.ep))
+		flags = flag(params.rinput.Context(params.ep))
 		// reverse the flag -- do this a nicer way!
 		flags = flag(int(flags) & ^0xF) |((flags & 0xA) >> 1) | ((flags & 0x5) << 1)
 		if flags & flag(syntax.EmptyBeginText) == 0 {
-			if  r, _ := params.input.step(params.ep); syntax.IsWordChar(r) {
+			if  r, _ := params.input.Step(params.ep); syntax.IsWordChar(r) {
 				flags |= flagLastWord
 			}
 		}
@@ -281,10 +289,10 @@ func (d *DFA) runStateOnRuneUnlocked(state *State,  r rune) *State {
 func (d *DFA) byteMap(r rune) int {
 	// Use the trivial byte map for now...
 	// See ComputeByteMap
-	if r == endOfText {
+	if r == input.EndOfText {
 		return len(d.divides);
 	}
-	if r == startOfText {
+	if r == input.StartOfText {
 		return len(d.divides) + 1
 	}
 	if r > 255 {
@@ -395,6 +403,19 @@ func (d *DFA) computeByteMap() {
 	} 
 }
 
+// runeSlice exists to permit sorting the case-folded rune sets.
+type runeSlice []rune
+
+func (p runeSlice) Len() int           { return len(p) }
+func (p runeSlice) Less(i, j int) bool { return p[i] < p[j] }
+func (p runeSlice) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
+
+// Sort is a convenience method.
+func (p runeSlice) Sort() {
+	sort.Sort(p)
+}
+
+
 // Processes input rune r in state, returning new state.
 func (d *DFA) runStateOnRune(state *State, r rune) *State {
 	if isSpecialState(state) {
@@ -442,10 +463,10 @@ func (d *DFA) runStateOnRune(state *State, r rune) *State {
 		afterflag |= flag(syntax.EmptyBeginLine)
 	}
 
-	if r == endOfText {
+	if r == input.EndOfText {
 	// Insert implicit $ and \z before the fake "end text" byte.
 		beforeflag |= flag(syntax.EmptyEndLine) | flag(syntax.EmptyEndText)
-	} else if r == startOfText {
+	} else if r == input.StartOfText {
 		beforeflag |= flag(syntax.EmptyBeginLine) | flag(syntax.EmptyBeginText)	
 	}	
 
@@ -453,7 +474,7 @@ func (d *DFA) runStateOnRune(state *State, r rune) *State {
 	// byte processed was a word character.  Use that info to
 	// insert empty-width (non-)word boundaries.
 	islastword := state.flag&flagLastWord != 0
-	isword := r != endOfText && syntax.IsWordChar(r)
+	isword := r != input.EndOfText && syntax.IsWordChar(r)
 	if isword == islastword {
 		beforeflag |= flag(syntax.EmptyNoWordBoundary)
 	} else {
@@ -478,7 +499,7 @@ func (d *DFA) runStateOnRune(state *State, r rune) *State {
 	// of the string, but we're at the end of the text so that's okay.
 	// Leaving q0_ alone preseves the match instructions that led to
 	// the current setting of ismatch.
-	if r != endOfText || d.kind != manyMatch {
+	if r != input.EndOfText || d.kind != manyMatch {
 		d.q0, d.q1 = d.q1, d.q0
 	}
 
@@ -938,14 +959,13 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 			// If firstbyte isn't found, we can skip to the end
 			// of the string.
 			if runForward {
-				p = params.input.index(d.regexp, p)
+				p = params.input.Index(d.prefixer, p)
 				if p < 0 {
 					p = ep
 					break
 				}
 			} else {
-				panic(" not handled... reverse index !" )
-				// p = params.input.rindex(d.regexp, ep)
+				// p = params.input.rindex(d.prefixer, ep)
 				if p < 0 {
 					p = ep
 					break
@@ -956,13 +976,13 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 
 		var r rune
 		if runForward {
-			r, w = params.input.step(p)
+			r, w = params.input.Step(p)
 			p += w
 		} else {
-			r, w = params.rinput.rstep(p)
+			r, w = params.rinput.Rstep(p)
 			p -= w
 		}
-		if r == endOfText  {
+		if r == input.EndOfText  {
 			break
 		}
 
@@ -1052,7 +1072,7 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 
 	// Process one more byte to see if it triggers a match.
 	// (Remember, matches are delayed one byte.)
-	lastbyte := endOfText // TODO(matloob): not really a byte...
+	lastbyte := input.EndOfText // TODO(matloob): not really a byte...
 
 	ns := d.loadNextState(s, lastbyte)
 	if ns == nil {

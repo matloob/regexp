@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package regexp
+package dfa
 
 // TODO(matloob): rename all the upper-case identifiers to lower-case.
 

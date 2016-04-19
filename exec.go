@@ -6,6 +6,8 @@ package regexp
 
 import (
 	"io"
+	"matloob.io/regexp/internal/input"
+	"matloob.io/regexp/internal/dfa"
 	"matloob.io/regexp/syntax"
 )
 
@@ -38,34 +40,32 @@ type machine struct {
 	re             *Regexp      // corresponding Regexp
 	p              *syntax.Prog // compiled program
 	op             *onePassProg // compiled onepass program, or notOnePass
-	fdfa, ldfa, revdfa            *DFA
-	maxBitStateLen int       // max length of string to search with bitstate
-	b              *bitState // state for backtracker, allocated lazily
-	q0, q1         queue     // two queues for runq, nextq
-	pool           []*thread // pool of available threads
-	matched        bool      // whether a match was found
-	matchcap       []int     // capture information for the match
+	searcher dfa.Searcher
+	maxBitStateLen int          // max length of string to search with bitstate
+	b              *bitState    // state for backtracker, allocated lazily
+	q0, q1         queue        // two queues for runq, nextq
+	pool           []*thread    // pool of available threads
+	matched        bool         // whether a match was found
+	matchcap       []int        // capture information for the match
 
 	// cached inputs, to avoid allocation
-	inputBytes  inputBytes
-	inputString inputString
-	inputReader inputReader
+	inputBytes  input.InputBytes
+	inputString input.InputString
+	inputReader input.InputReader
 }
 
-func (m *machine) newInputBytes(b []byte) input {
-	m.inputBytes.str = b
+func (m *machine) newInputBytes(b []byte) input.Input {
+	m.inputBytes.Reset(b)
 	return &m.inputBytes
 }
 
-func (m *machine) newInputString(s string) input {
-	m.inputString.str = s
+func (m *machine) newInputString(s string) input.Input {
+	m.inputString.Reset(s)
 	return &m.inputString
 }
 
-func (m *machine) newInputReader(r io.RuneReader) input {
-	m.inputReader.r = r
-	m.inputReader.atEOT = false
-	m.inputReader.pos = 0
+func (m *machine) newInputReader(r io.RuneReader) input.Input {
+	m.inputReader.Reset(r)
 	return &m.inputReader
 }
 
@@ -111,7 +111,7 @@ func (m *machine) alloc(i *syntax.Inst) *thread {
 // match runs the machine over the input starting at pos.
 // It reports whether a match was found.
 // If so, m.matchcap holds the submatch information.
-func (m *machine) match(i input, pos int) bool {
+func (m *machine) match(i input.Input, pos int) bool {
 	startCond := m.re.cond
 	if startCond == ^syntax.EmptyOp(0) { // impossible
 		return false
@@ -121,17 +121,17 @@ func (m *machine) match(i input, pos int) bool {
 		m.matchcap[i] = -1
 	}
 	runq, nextq := &m.q0, &m.q1
-	r, r1 := endOfText, endOfText
+	r, r1 := input.EndOfText, input.EndOfText
 	width, width1 := 0, 0
-	r, width = i.step(pos)
-	if r != endOfText {
-		r1, width1 = i.step(pos + width)
+	r, width = i.Step(pos)
+	if r != input.EndOfText {
+		r1, width1 = i.Step(pos + width)
 	}
 	var flag syntax.EmptyOp
 	if pos == 0 {
 		flag = syntax.EmptyOpContext(-1, r)
 	} else {
-		flag = i.context(pos)
+		flag = i.Context(pos)
 	}
 	for {
 		if len(runq.dense) == 0 {
@@ -143,15 +143,15 @@ func (m *machine) match(i input, pos int) bool {
 				// Have match; finished exploring alternatives.
 				break
 			}
-			if len(m.re.prefix) > 0 && r1 != m.re.prefixRune && i.canCheckPrefix() {
+			if len(m.re.prefix) > 0 && r1 != m.re.prefixRune && i.CanCheckPrefix() {
 				// Match requires literal prefix; fast search for it.
-				advance := i.index(m.re, pos)
+				advance := i.Index(m.re, pos)
 				if advance < 0 {
 					break
 				}
 				pos += advance
-				r, width = i.step(pos)
-				r1, width1 = i.step(pos + width)
+				r, width = i.Step(pos)
+				r1, width1 = i.Step(pos + width)
 			}
 		}
 		if !m.matched {
@@ -172,8 +172,8 @@ func (m *machine) match(i input, pos int) bool {
 		}
 		pos += width
 		r, width = r1, width1
-		if r != endOfText {
-			r1, width1 = i.step(pos + width)
+		if r != input.EndOfText {
+			r1, width1 = i.Step(pos + width)
 		}
 		runq, nextq = nextq, runq
 	}
@@ -193,7 +193,7 @@ func (m *machine) clear(q *queue) {
 
 // step executes one step of the machine, running each of the threads
 // on runq and appending new threads to nextq.
-// The step processes the rune c (which may be endOfText),
+// The step processes the rune c (which may be input.EndOfText),
 // which starts at position pos and ends at nextPos.
 // nextCond gives the setting for the empty-width flags after c.
 func (m *machine) step(runq, nextq *queue, pos, nextPos int, c rune, nextCond syntax.EmptyOp) {
@@ -310,7 +310,7 @@ func (m *machine) add(q *queue, pc uint32, pos int, cap []int, cond syntax.Empty
 // onepass runs the machine over the input starting at pos.
 // It reports whether a match was found.
 // If so, m.matchcap holds the submatch information.
-func (m *machine) onepass(i input, pos int) bool {
+func (m *machine) onepass(i input.Input, pos int) bool {
 	startCond := m.re.cond
 	if startCond == ^syntax.EmptyOp(0) { // impossible
 		return false
@@ -319,29 +319,29 @@ func (m *machine) onepass(i input, pos int) bool {
 	for i := range m.matchcap {
 		m.matchcap[i] = -1
 	}
-	r, r1 := endOfText, endOfText
+	r, r1 := input.EndOfText, input.EndOfText
 	width, width1 := 0, 0
-	r, width = i.step(pos)
-	if r != endOfText {
-		r1, width1 = i.step(pos + width)
+	r, width = i.Step(pos)
+	if r != input.EndOfText {
+		r1, width1 = i.Step(pos + width)
 	}
 	var flag syntax.EmptyOp
 	if pos == 0 {
 		flag = syntax.EmptyOpContext(-1, r)
 	} else {
-		flag = i.context(pos)
+		flag = i.Context(pos)
 	}
 	pc := m.op.Start
 	inst := m.op.Inst[pc]
 	// If there is a simple literal prefix, skip over it.
 	if pos == 0 && syntax.EmptyOp(inst.Arg)&^flag == 0 &&
-		len(m.re.prefix) > 0 && i.canCheckPrefix() {
+		len(m.re.prefix) > 0 && i.CanCheckPrefix() {
 		// Match requires literal prefix; fast search for it.
-		if i.hasPrefix(m.re) {
+		if i.HasPrefix(m.re) {
 			pos += len(m.re.prefix)
-			r, width = i.step(pos)
-			r1, width1 = i.step(pos + width)
-			flag = i.context(pos)
+			r, width = i.Step(pos)
+			r1, width1 = i.Step(pos + width)
+			flag = i.Context(pos)
 			pc = int(m.re.prefixEnd)
 		} else {
 			return m.matched
@@ -399,8 +399,8 @@ func (m *machine) onepass(i input, pos int) bool {
 		flag = syntax.EmptyOpContext(r, r1)
 		pos += width
 		r, width = r1, width1
-		if r != endOfText {
-			r1, width1 = i.step(pos + width)
+		if r != input.EndOfText {
+			r1, width1 = i.Step(pos + width)
 		}
 	}
 	return m.matched
@@ -415,7 +415,7 @@ var empty = make([]int, 0)
 // the position of its subexpressions.
 func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap int) []int {
 	m := re.get()
-	var i input
+	var i input.Input
 	var size int
 	if r != nil {
 		i = m.newInputReader(r)
@@ -431,56 +431,20 @@ func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap i
 			re.put(m)
 			return nil
 		}
-/*	} else if size < m.maxBitStateLen && r == nil {
+	} else if size < m.maxBitStateLen && r == nil {
 		if m.b == nil {
 			m.b = newBitState(m.p)
 		}
 		if !m.backtrack(i, pos, size, ncap) {
 			re.put(m)
 			return nil
-		}*/
+		}
 	} else {
-		_ = size
-		if ncap <= 0 {
-			if reverse(i) == nil {
-				goto nfa
-			}
-			var dfa *DFA 
-			if m.re.longest {
-				if m.ldfa == nil {
-					m.ldfa = newDFA(re.prog, longestMatch, 10000)
-				}
-				dfa = m.ldfa
-			} else {
-				if m.fdfa == nil {
-					m.fdfa = newDFA(re.prog, firstMatch, 10000)
-				}
-				dfa = m.fdfa
-			}
-			if m.revdfa == nil {
-				// XXX find me a good home
-				// recreate syntax.Regexp (we shouldn't need to do thi)
-				re, err := syntax.Parse(re.expr, syntax.Perl)
-				if err != nil {
-					panic("parse failed")
-				}
-				re.Simplify()
-				revprog, err := syntax.CompileReversed(re)
-				if err != nil {
-					panic("CompileReversed failed")
-				}
-
-				m.revdfa = newReverseDFA(revprog, longestMatch, 50000)
-			}
-			var matched bool
-			m.matchcap = m.matchcap[:ncap]
-			i, j, matched, err := dfa.search(i, pos, m.revdfa)
+		if ncap <= 2 {
+			m.searcher.Init(re.prog, re.expr)
+			matched, err := m.searcher.Search(i, pos, m.re.longest, &m.matchcap, ncap)
 			if err != nil {
-				// DFA match failed ... fall back to NFA
 				goto nfa
-			}
-			if ncap > 0 {
-				m.matchcap[0], m.matchcap[1] = i, j
 			}
 			if !matched {
 				re.put(m)

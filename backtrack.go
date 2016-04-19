@@ -14,7 +14,10 @@
 
 package regexp
 
-import "matloob.io/regexp/syntax"
+import (
+	"matloob.io/regexp/internal/input"
+	"matloob.io/regexp/syntax"
+)
 
 // A job is an entry on the backtracker's job stack. It holds
 // the instruction pc and the position in the input.
@@ -129,7 +132,7 @@ func (b *bitState) push(pc uint32, pos int, arg int) {
 }
 
 // tryBacktrack runs a backtracking search starting at pos.
-func (m *machine) tryBacktrack(b *bitState, i input, pc uint32, pos int) bool {
+func (m *machine) tryBacktrack(b *bitState, i input.Input, pc uint32, pos int) bool {
 	longest := m.re.longest
 	m.matched = false
 
@@ -201,7 +204,7 @@ func (m *machine) tryBacktrack(b *bitState, i input, pc uint32, pos int) bool {
 			goto CheckAndLoop
 
 		case syntax.InstRune:
-			r, width := i.step(pos)
+			r, width := i.Step(pos)
 			if !inst.MatchRune(r) {
 				continue
 			}
@@ -210,7 +213,7 @@ func (m *machine) tryBacktrack(b *bitState, i input, pc uint32, pos int) bool {
 			goto CheckAndLoop
 
 		case syntax.InstRune1:
-			r, width := i.step(pos)
+			r, width := i.Step(pos)
 			if r != inst.Rune[0] {
 				continue
 			}
@@ -219,8 +222,8 @@ func (m *machine) tryBacktrack(b *bitState, i input, pc uint32, pos int) bool {
 			goto CheckAndLoop
 
 		case syntax.InstRuneAnyNotNL:
-			r, width := i.step(pos)
-			if r == '\n' || r == endOfText {
+			r, width := i.Step(pos)
+			if r == '\n' || r == input.EndOfText {
 				continue
 			}
 			pos += width
@@ -228,8 +231,8 @@ func (m *machine) tryBacktrack(b *bitState, i input, pc uint32, pos int) bool {
 			goto CheckAndLoop
 
 		case syntax.InstRuneAny:
-			r, width := i.step(pos)
-			if r == endOfText {
+			r, width := i.Step(pos)
+			if r == input.EndOfText {
 				continue
 			}
 			pos += width
@@ -255,7 +258,7 @@ func (m *machine) tryBacktrack(b *bitState, i input, pc uint32, pos int) bool {
 			panic("bad arg in InstCapture")
 
 		case syntax.InstEmptyWidth:
-			if syntax.EmptyOp(inst.Arg)&^i.context(pos) != 0 {
+			if syntax.EmptyOp(inst.Arg)&^i.Context(pos) != 0 {
 				continue
 			}
 			pc = inst.Out
@@ -303,8 +306,8 @@ func (m *machine) tryBacktrack(b *bitState, i input, pc uint32, pos int) bool {
 }
 
 // backtrack runs a backtracking search of prog on the input starting at pos.
-func (m *machine) backtrack(i input, pos int, end int, ncap int) bool {
-	if !i.canCheckPrefix() {
+func (m *machine) backtrack(i input.Input, pos int, end int, ncap int) bool {
+	if !i.CanCheckPrefix() {
 		panic("backtrack called for a RuneReader")
 	}
 
@@ -343,7 +346,7 @@ func (m *machine) backtrack(i input, pos int, end int, ncap int) bool {
 	for ; pos <= end && width != 0; pos += width {
 		if len(m.re.prefix) > 0 {
 			// Match requires literal prefix; fast search for it.
-			advance := i.index(m.re, pos)
+			advance := i.Index(m.re, pos)
 			if advance < 0 {
 				return false
 			}
@@ -357,7 +360,7 @@ func (m *machine) backtrack(i input, pos int, end int, ncap int) bool {
 			// Match must be leftmost; done.
 			return true
 		}
-		_, width = i.step(pos)
+		_, width = i.Step(pos)
 	}
 	return false
 }

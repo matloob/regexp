@@ -1,17 +1,17 @@
-package regexp
+package dfa
 
 import (
-	"reflect"
 	"testing"
 
 	"matloob.io/regexp/syntax"
+	"matloob.io/regexp/internal/input"
 )
 
 func matchDFA(regexp string, input string) (int, int, bool, error) {
 	return matchDFA2(regexp, input, false)
 }
 
-func matchDFA2(regexp string, input string, longest bool) (int, int, bool, error) {
+func matchDFA2(regexp string, inputstr string, longest bool) (int, int, bool, error) {
 	re, err := syntax.Parse(regexp, syntax.Perl)
 	if err != nil {
 		return 0, 0, false, err
@@ -35,8 +35,9 @@ func matchDFA2(regexp string, input string, longest bool) (int, int, bool, error
 
 	reversed := newReverseDFA(revprog, longestMatch, 0)
 
-	i := &inputString{input}
-	j, k, b, err := d.search(i, 0, reversed)
+	var i input.InputString
+	i.Reset(inputstr)
+	j, k, b, err := d.search(&i, 0, reversed)
 	return j, k, b, err
 }
 
@@ -81,43 +82,6 @@ func TestDFA(t *testing.T) {
 	}
 
 }
-
-func TestLongest2(t *testing.T) {
-	re, err := Compile(`a(|b)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	re.Longest()
-	if g, w := re.FindString("ab"), "ab"; g != w {
-		t.Errorf("longest match was %q, want %q", g, w)
-	}
-}
-
-func TestLongest3(t *testing.T) {
-	re, err := Compile(`(?:A|(?:A|a))`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	re.longest = false
-	if g, w := re.FindStringSubmatchIndex("B"), []int(nil); !reflect.DeepEqual(g, w) {
-		t.Errorf("longest match was %v, want %v", g, w)
-	}
-	re.longest = true
-	if g, w := re.FindStringSubmatchIndex("B"), []int(nil); !reflect.DeepEqual(g, w) {
-		t.Errorf("longest match was %v, want %v", g, w)
-	}
-}
-
-func TestDFA5(t *testing.T) {
-	b, err := MatchString(`(?:A|(?:A|a))`, `B`)
-	if err != nil {
-		t.Error(err)
-	}
-	if b {
-		t.Errorf("got true, want false")
-	}
-}
-
 func TestDFA3(t *testing.T) {
 	// These are all anchored matches.
 	testCases := []struct {

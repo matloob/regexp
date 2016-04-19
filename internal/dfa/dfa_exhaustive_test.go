@@ -1,4 +1,4 @@
-package regexp
+package dfa
 
 import (
 	"bufio"
@@ -8,18 +8,16 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	
-	"fmt"
 )
 
 func TestDFAZVV(t *testing.T) {
-	testDFA(t, "testdata/re2-search.txt")
+	testDFA(t, "../../testdata/re2-search.txt")
 }
 
 
 // THIS IS REALLY SLOW
-func TestDFAExhaustive(t *testing.T) {
-	testDFA(t, "testdata/re2-exhaustive.txt.bz2")
+func xTestDFAExhaustive(t *testing.T) {
+	testDFA(t, "../../testdata/re2-exhaustive.txt.bz2")
 }
 
 func testDFA(t *testing.T, file string) {
@@ -47,7 +45,6 @@ func testDFA(t *testing.T, file string) {
 		ncase     int
 	)
 	for lineno := 1; scanner.Scan(); lineno++ {
-		fmt.Println(lineno, "  ",  ncase)
 		line := scanner.Text()
 		switch {
 		case line == "":
@@ -100,7 +97,7 @@ func testDFA(t *testing.T, file string) {
 				t.Fatalf("%s:%d: have %d test results, want %d", file, lineno, len(res), len(run))
 			}
 			for i := range res {
-				have, suffix := dfarun[i](q, full, text)
+				have, suffix := run[i](q, full, text)
 				want := parseResult(t, file, lineno, res[i])
 				if len(want) <= 2 && !same(have, want) {
 					t.Errorf("%s:%d: %#q%s.FindSubmatchIndex(%#q) = %v, want %v", file, lineno, q, suffix, text, have, want)
@@ -109,7 +106,7 @@ func testDFA(t *testing.T, file string) {
 					}
 					continue
 				}
-				b, suffix := dfamatch[i](q, full, text)
+				b, suffix := match[i](q, full, text)
 				if b != (want != nil) {
 					t.Errorf("%s:%d: %#q%s.MatchString(%#q) = %v, want %v", file, lineno, q, suffix, text, b, !b)
 					if nfail++; nfail >= 100 {
@@ -135,26 +132,26 @@ func testDFA(t *testing.T, file string) {
 // TODO(matloob): This is deceptive because we're not reusing the DFA between
 // tests. FIX IT!
 
-var dfarun = []func(string, string, string) ([]int, string){
-	dfarunFull,
-	dfarunPartial,
-	dfarunFullLongest,
-	dfarunPartialLongest,
+var run = []func(string, string, string) ([]int, string){
+	runFull,
+	runPartial,
+	runFullLongest,
+	runPartialLongest,
 }
 
-func dfarunFull(re, refull, text string) ([]int, string) {
+func runFull(re, refull, text string) ([]int, string) {
 	return dfaSubmatchIndex(refull, text, false), "[full]"
 }
 
-func dfarunPartial(re, refull, text string) ([]int, string) {
+func runPartial(re, refull, text string) ([]int, string) {
 	return dfaSubmatchIndex(re, text, false), ""
 }
 
-func dfarunFullLongest(re, refull, text string) ([]int, string) {
+func runFullLongest(re, refull, text string) ([]int, string) {
 	return dfaSubmatchIndex(refull, text, true), "[full,longest]"
 }
 
-func dfarunPartialLongest(re, refull, text string) ([]int, string) {
+func runPartialLongest(re, refull, text string) ([]int, string) {
 	return dfaSubmatchIndex(re, text, true), "[longest]"
 }
 
@@ -166,26 +163,26 @@ func dfaSubmatchIndex(re, text string, longest bool) []int {
 	return []int{i, j}
 }
 
-var dfamatch = []func(string, string, string) (bool, string){
-	dfamatchFull,
-	dfamatchPartial,
-	dfamatchFullLongest,
-	dfamatchPartialLongest,
+var match = []func(string, string, string) (bool, string){
+	matchFull,
+	matchPartial,
+	matchFullLongest,
+	matchPartialLongest,
 }
 
-func dfamatchFull(re, refull, text string) (bool, string) {
+func matchFull(re, refull, text string) (bool, string) {
 	return dfaMatchString(refull, text, false), "[full]"
 }
 
-func dfamatchPartial(re, refull, text string) (bool, string) {
+func matchPartial(re, refull, text string) (bool, string) {
 	return dfaMatchString(re, text, false), ""
 }
 
-func dfamatchFullLongest(re, refull, text string) (bool, string) {
+func matchFullLongest(re, refull, text string) (bool, string) {
 	return dfaMatchString(refull, text, true), "[full,longest]"
 }
 
-func dfamatchPartialLongest(re, refull, text string) (bool, string) {
+func matchPartialLongest(re, refull, text string) (bool, string) {
 	return dfaMatchString(re, text, true), "[longest]"
 }
 
