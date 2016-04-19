@@ -1,3 +1,6 @@
+// Copyright 2016 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package dfa
 
@@ -5,7 +8,6 @@ import (
 	"errors"
 	"sort"
 	"sync"
-	"fmt"
 	"sync/atomic"
 	"matloob.io/regexp/internal/input"
 	"matloob.io/regexp/syntax"
@@ -82,7 +84,6 @@ var errFallBack = errors.New("falling back to NFA")
 
 func (d *DFA) loadNextState(from *State, r rune) *State {
 	// TODO(matloob): Atomize this once *States are indexes into state array...
-	fmt.Println("fromnext:", len(from.next))
 	return from.next[d.rangemap.lookup(r)]
 }
 

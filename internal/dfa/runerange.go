@@ -42,6 +42,7 @@ func (rm *rangeMap) lookup(r rune) int {
 			}
 		}
 	}
+	// Faster lookup for runes < 256.
 	return rm.bytemap[int(r)]
 }
 
@@ -51,86 +52,75 @@ func (rm *rangeMap) count() int {
 }
 
 func (rm *rangeMap) init(prog *syntax.Prog) {
-	divides := make(map[rune]bool)
+	rangemark := make(map[rune]bool)
+	addRune := func(r rune) {
+		rangemark[r] = true
+		rangemark[r+1] = true
+	}
+	addRuneRange := func(rl, rh rune) {
+		rangemark[rl] = true
+		rangemark[rh+1] = true
+	}
+	addRuneFolds := func(r rune) {
+		for r1 := unicode.SimpleFold(r) ;r1 != r; r1 = unicode.SimpleFold(r1) {
+			addRune(r1)
+		}
+	}
 	for _, inst := range prog.Inst {
 		switch inst.Op {
 		case syntax.InstRune:
 			if len(inst.Rune) == 1 {
-				r0 := inst.Rune[0]
-				divides[r0] = true
-				divides[r0+1] = true
+				// special case of single rune
+				r := inst.Rune[0]
+				addRune(r)
 				if syntax.Flags(inst.Arg)&syntax.FoldCase != 0 {
-					for r1 := unicode.SimpleFold(r0); r1 != r0; r1 = unicode.SimpleFold(r1) {
-
-						divides[r1] = true
-
-						divides[r1+1] = true
-					}
+					addRuneFolds(r)
 				}
 				break
-			} else {
-				for i := 0; i < len(inst.Rune); i += 2 {
-					divides[inst.Rune[i]] = true
-					divides[inst.Rune[i+1]+1] = true
-					if syntax.Flags(inst.Arg)&syntax.FoldCase != 0 {
-						rl := inst.Rune[i]
-						rh := inst.Rune[i+1]
-						for r0 := rl; r0 <= rh; r0++ {
-							// range mapping doesn't commute...
-							for r1 := unicode.SimpleFold(r0); r1 != r0; r1 = unicode.SimpleFold(r1) {
-								divides[r1] = true
-
-								divides[r1+1] = true
-							}
-						}
+			}
+			// otherwise inst.Rune is a series of ranges
+			for i := 0; i < len(inst.Rune); i += 2 {
+				addRuneRange(inst.Rune[i], inst.Rune[i+1])
+				if syntax.Flags(inst.Arg)&syntax.FoldCase != 0 {
+					for r0 := inst.Rune[i]; r0 <= inst.Rune[i+1]; r0++ {
+						// Range mapping doesn't commute, so we have to
+						// add folds individually.
+						addRuneFolds(r0)
 					}
 				}
 			}
-
 		case syntax.InstRune1:
-			r0 := inst.Rune[0]
-			divides[r0] = true
-			divides[r0+1] = true
+			r := inst.Rune[0]
+			addRune(r)
 			if syntax.Flags(inst.Arg)&syntax.FoldCase != 0 {
-				for r1 := unicode.SimpleFold(r0); r1 != r0; r1 = unicode.SimpleFold(r1) {
-					divides[r1] = true
-					divides[r1+1] = true
-				}
+				addRuneFolds(r)
 			}
 		case syntax.InstRuneAnyNotNL:
-			divides['\n'] = true
-			divides['\n'+1] = true
-
+			addRune('\n')
 		case syntax.InstEmptyWidth:
 			switch syntax.EmptyOp(inst.Arg) {
 			case syntax.EmptyBeginLine, syntax.EmptyEndLine:
-				divides['\n'] = true
-				divides['\n'+1] = true
+				addRune('\n')
 			case syntax.EmptyWordBoundary, syntax.EmptyNoWordBoundary:
-				// can we turn this into an InstRune?
-				divides['A'] = true
-				divides['Z'+1] = true
-				divides['a'] = true
-				divides['z'+1] = true
-				divides['0'] = true
-				divides['9'+1] = true
-				divides['_'] = true
-				divides['_'+1] = true
+				addRuneRange('A', 'Z')
+				addRuneRange('a', 'Z')
+				addRuneRange('0', '9')
+				addRune('_')
 			}
 		}
 	}
 
-	divl := make([]rune, 0, len(divides))
-	divl = append(divl, -1)
-	for r := range divides {
-		divl = append(divl, r)
+	divides := make([]rune, 0, len(rangemark))
+	divides = append(divides, -1)
+	for r := range rangemark {
+		divides = append(divides, r)
 	}
-	runeSlice(divl).Sort()
-	rm.divides = divl
+	runeSlice(divides).Sort()
+	rm.divides = divides
 	rm.bytemap = make([]int, 256)
 	k := 0
 	for i := range rm.bytemap {
-		if divides[rune(i)] {
+		if rangemark[rune(i)] {
 			k++
 		}
 		rm.bytemap[i] = k
