@@ -7,7 +7,6 @@ package regexp
 import (
 	"io"
 	"matloob.io/regexp/internal/input"
-	"matloob.io/regexp/internal/dfa"
 	"matloob.io/regexp/syntax"
 )
 
@@ -40,7 +39,6 @@ type machine struct {
 	re             *Regexp      // corresponding Regexp
 	p              *syntax.Prog // compiled program
 	op             *onePassProg // compiled onepass program, or notOnePass
-	searcher dfa.Searcher
 	maxBitStateLen int          // max length of string to search with bitstate
 	b              *bitState    // state for backtracker, allocated lazily
 	q0, q1         queue        // two queues for runq, nextq
@@ -441,8 +439,7 @@ func (re *Regexp) doExecute(r io.RuneReader, b []byte, s string, pos int, ncap i
 		}
 	} else {
 		if ncap <= 2 {
-			m.searcher.Init(re.prog, re.expr)
-			matched, err := m.searcher.Search(i, pos, m.re.longest, &m.matchcap, ncap)
+			matched, err := re.searcher.Search(i, pos, m.re.longest, &m.matchcap, ncap)
 			if err != nil {
 				goto nfa
 			}

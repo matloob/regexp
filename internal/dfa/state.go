@@ -9,12 +9,15 @@ package dfa
 import (
 	"bytes"
 	"strconv"
+	"sync"
 )
 
 // just use ints instead of stateinst??
 type stateInst int
 
 type State struct {
+	mu sync.Mutex
+
 	// Instruction pointers in the state.
 	// TODO(matloob): Should these have a different type?
 	inst []int
@@ -43,9 +46,9 @@ var (
 
 // Special "firstbyte" values for a state.  (Values >= 0 denote actual bytes.)
 const (
-	fbUnknown = -1 // No analysis has been performed.
-	fbMany    = -2 // Many bytes will lead out of this state.
-	fbNone    = -3 // No bytes lead out of this state.
+	fbUnknown int64 = -1 // No analysis has been performed.
+	fbMany int64   = -2 // Many bytes will lead out of this state.
+	fbNone int64  = -3 // No bytes lead out of this state.
 )
 
 const (
@@ -60,7 +63,7 @@ const (
 	kStartAnchored = 1
 )
 
-var mark stateInst = -1
+const mark = -1
 
 // TODO(matloob): in RE2 deadState and fullMatchState are (State*)(1) and (State*)(2)
 // respectively. Is it cheaper to compare with those numbers, than these states?
@@ -113,15 +116,21 @@ type stateSet struct {
 	nextpos  int
 }
 
-// inst, flag, next
+func (s *stateSet) init(budget int, runeRanges int, proglen int, nmark int) {
+	// estimate State size to avoid using unsafe
+	const intsize = 8
+	const slicesize = 3*intsize
+	const statesize = 2 *slicesize+intsize
 
-func (s *stateSet) init(budget int) {
+	// the cost of one state including the inst and next slices
+	onestate := statesize + runeRanges*intsize + (proglen+nmark)*intsize
+	numstates := budget/onestate
 	// TODO(matloob): actually use budget number
-	s.states = make([]State, 0, 1000)
+	s.states = make([]State, 0, numstates)
 
-	s.instpool = make([]int, 0, 5000)
+	s.instpool = make([]int, 0, (proglen+nmark)*numstates)
 	s.instpos = 0
-	s.nextpool = make([]*State, 0, 5000)
+	s.nextpool = make([]*State, 0, runeRanges*numstates)
 	s.nextpos = 0
 
 }

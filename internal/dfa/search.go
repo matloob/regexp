@@ -5,6 +5,7 @@
 package dfa
 
 import (
+	"sync"
 	"errors"
 	"math"
 	"matloob.io/regexp/internal/input"
@@ -12,52 +13,62 @@ import (
 )
 
 type Searcher struct {
-	expr               string
+	mu sync.Mutex
+	re               *syntax.Regexp
 	prog               *syntax.Prog
+	prefixer input.Prefixer
 	fdfa, ldfa, revdfa *DFA
 }
 
-func (s *Searcher) Init(prog *syntax.Prog, expr string) {
+func (s *Searcher) Init(prog *syntax.Prog, expr *syntax.Regexp, p input.Prefixer) {
 	s.prog = prog
-	s.expr = expr
+	s.re = expr
+	s.prefixer = p 
 }
 
 var errNotDFA = errors.New("can't use dfa")
 
 func (s *Searcher) Search(i input.Input, pos int, longest bool, matchcap *[]int, ncap int) (bool, error) {
+	const budget = (2 << 20)/3
 	rinput, ok := i.(input.Rinput)
 	if !ok {
 		return false, errNotDFA
 	}
 	var dfa *DFA
 	if longest {
+		s.mu.Lock()
 		if s.ldfa == nil {
-			s.ldfa = newDFA(s.prog, longestMatch, 10000)
+			s.ldfa = newDFA(s.prog, longestMatch, budget)
+			s.ldfa.prefixer = s.prefixer
 		}
 		dfa = s.ldfa
+		s.mu.Unlock()
 	} else {
+		s.mu.Lock()
 		if s.fdfa == nil {
-			s.fdfa = newDFA(s.prog, firstMatch, 10000)
+			s.fdfa = newDFA(s.prog, firstMatch, budget)
+			s.fdfa.prefixer = s.prefixer
 		}
 		dfa = s.fdfa
+		s.mu.Unlock()
 	}
+	var revdfa *DFA
 	if s.revdfa == nil {
-		// XXX find me a good home
-		// recreate syntax.Regexp (we shouldn't need to do thi)
-		re, err := syntax.Parse(s.expr, syntax.Perl)
-		if err != nil {
-			panic("parse failed")
-		}
-		re.Simplify()
-		revprog, err := syntax.CompileReversed(re)
+		s.mu.Lock()
+		revprog, err := syntax.CompileReversed(s.re)
 		if err != nil {
 			panic("CompileReversed failed")
 		}
-		s.revdfa = newDFA(revprog, longestMatch, 50000)
+		s.revdfa = newDFA(revprog, longestMatch, budget)
+		s.mu.Unlock()
 	}
+	s.mu.Lock()
+	revdfa = s.revdfa
+	s.mu.Unlock()
+		
 	var matched bool
 	*matchcap = (*matchcap)[:ncap]
-	p, ep, matched, err := search(dfa, s.revdfa, rinput, pos)
+	p, ep, matched, err := search(dfa, revdfa, rinput, pos)
 	if err != nil {
 		return false, errNotDFA
 	}
@@ -81,11 +92,16 @@ type searchParams struct {
 	matches []int
 }
 
+func isanchored(prog *syntax.Prog) bool {
+	return prog.StartCond() & syntax.EmptyBeginText != 0
+}
+
 func search(d, reversed *DFA, i input.Rinput, startpos int) (start int, end int, matched bool, err error) {
 	params := searchParams{}
 	params.startpos = startpos
 	params.wantEarliestMatch = false
 	params.input = i
+	params.anchored = isanchored(d.prog)
 	params.runForward = true
 	params.ep = int(math.MaxInt64)
 	if !d.analyzeSearch(&params) {

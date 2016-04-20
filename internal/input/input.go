@@ -156,6 +156,15 @@ func (i *InputBytes) HasPrefix(p Prefixer) bool {
 }
 
 func (i *InputBytes) Index(p Prefixer, pos int) int {
+	if pos > len(i.str) {
+		panic("pos > len i.str")
+	}
+	if i.str == nil {
+		panic("i.str nil")
+	}
+	if p == nil {
+		panic("p is nil")
+	}
 	return bytes.Index(i.str[pos:], p.PrefixBytes())
 }
 

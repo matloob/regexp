@@ -6,6 +6,7 @@
 package dfa
 
 import (
+	"fmt"
 	"errors"
 	"sort"
 	"sync"
@@ -16,7 +17,7 @@ import (
 
 const DebugDFA = false
 
-var DebugPrintf = func(format string, a ...interface{}) {}
+var DebugPrintf =  fmt.Printf //func(format string, a ...interface{}) {}
 
 type matchKind int
 
@@ -71,7 +72,7 @@ func newDFA(prog *syntax.Prog, kind matchKind, maxMem int64) *DFA {
 	// Account for space needed for DFA, q0, q1, astack.
 	/* TODO(matloob): DO state memory budget stuff */
 	d.stateBudget = d.memBudget
-	d.stateCache.init(int(maxMem))
+	d.stateCache.init(int(maxMem), d.rangemap.count(), len(prog.Inst), nmark)
 
 	d.q0 = newWorkq(len(prog.Inst), nmark)
 	d.q1 = newWorkq(len(prog.Inst), nmark)
@@ -83,13 +84,18 @@ func newDFA(prog *syntax.Prog, kind matchKind, maxMem int64) *DFA {
 var errFallBack = errors.New("falling back to NFA")
 
 func (d *DFA) loadNextState(from *State, r rune) *State {
-	// TODO(matloob): Atomize this once *States are indexes into state array...
-	return from.next[d.rangemap.lookup(r)]
+	// TODO(matloob): Do an atomic read from from.next and eliminate mutex.
+	from.mu.Lock()
+	s := from.next[d.rangemap.lookup(r)]
+	from.mu.Unlock()
+	return s
 }
 
 func (d *DFA) storeNextState(from *State, r rune, to *State) {
-	// TODO(matloob): Atomize this once *States are indexes into state array...
+	// TODO(matloob): Do an atomic write to from.next and eliminate mutex.
+	from.mu.Lock()
 	from.next[d.rangemap.lookup(r)] = to
+	from.mu.Unlock()
 }
 
 func (d *DFA) analyzeSearch(params *searchParams) bool {
@@ -174,9 +180,29 @@ func (d *DFA) analyzeSearchHelper(params *searchParams, info *startInfo, flags f
 		atomic.StoreInt64(&info.firstbyte, fbNone)
 		return true
 	}
+  
+  	// Try to find a byte going out by looking through runes < 256
+  	firstByte := fbNone
+  	for r := rune(0); r < 256; r++ {
+  		s := d.runStateOnRune(info.start, r)
+  		if s == nil {
+  			// Synchronize with "quick check" above.
+  			atomic.StoreInt64(&info.firstbyte, fbNone)
+  			return false
+  		}
+  		if s == info.start {
+  			continue
+  		}
+  		if firstByte == fbNone {
+  			firstByte = int64(r) // ... first one
+  		} else {
+  			firstByte = fbMany // ... too many
+  			break
+  		}
+  	}
 
 	// Synchronize with "quick check" above.
-	atomic.StoreInt64(&info.firstbyte, fbNone)
+	atomic.StoreInt64(&info.firstbyte, firstByte)
 	return true
 
 }
@@ -694,7 +720,7 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 		if DebugDFA {
 			DebugPrintf("@%d: %s\n", p-bp, s.Dump())
 		}
-		if haveFirstbyte && s == start {
+		if haveFirstbyte && s == start && p == params.startpos{
 			// TODO(matloob): Correct the comment
 			// In start state, only way out is to find firstbyte,
 			// so use optimized assembly in memchr to skip ahead.
@@ -707,12 +733,14 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 					break
 				}
 			} else {
-				// p = params.input.rindex(d.prefixer, ep)
+				panic("XXX")
+				// TODO(matloob): RINDEX!
+				p = params.input.Index(d.prefixer, ep)
 				if p < 0 {
 					p = ep
 					break
 				}
-				p++
+				p++ 
 			}
 		}
 
@@ -843,6 +871,7 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 	}
 	if !isSpecialState(s) && s.isMatch() {
 		matched = true
+		lastMatch = p
 	}
 	params.ep = lastMatch
 	return matched

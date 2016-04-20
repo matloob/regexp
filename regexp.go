@@ -68,6 +68,7 @@ import (
 	"bytes"
 	"io"
 	"matloob.io/regexp/syntax"
+	"matloob.io/regexp/internal/dfa"
 	"strconv"
 	"strings"
 	"sync"
@@ -99,6 +100,7 @@ type regexpRO struct {
 	numSubexp      int
 	subexpNames    []string
 	longest        bool
+	searcher dfa.Searcher
 }
 
 // String returns the source text used to compile the regular expression.
@@ -187,6 +189,7 @@ func compile(expr string, mode syntax.Flags, longest bool) (*Regexp, error) {
 			longest:     longest,
 		},
 	}
+	regexp.regexpRO.searcher.Init(prog, re, regexp)
 	if regexp.onepass == notOnePass {
 		regexp.prefix, regexp.prefixComplete = prog.Prefix()
 	} else {
