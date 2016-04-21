@@ -145,6 +145,9 @@ func (d *DFA) analyzeSearch(params *searchParams) bool {
 
 	params.start = info.start
 	params.firstbyte = atomic.LoadInt64(&info.firstbyte)
+	if params.firstbyte >= 0 {
+		DebugPrintf("hasfirstbyte\n")
+	}
 
 	return true
 }
@@ -185,25 +188,12 @@ func (d *DFA) analyzeSearchHelper(params *searchParams, info *startInfo, flags f
 		return true
 	}
   
-  	// Try to find a byte going out by looking through runes < 256
+	// TODO(matloob): we don't actually use firstbyte. fix that!
   	firstByte := fbNone
-  	for r := rune(0); r < 256; r++ {
-  		s := d.runStateOnRune(info.start, r)
-  		if s == nil {
-  			// Synchronize with "quick check" above.
-  			atomic.StoreInt64(&info.firstbyte, fbNone)
-  			return false
-  		}
-  		if s == info.start {
-  			continue
-  		}
-  		if firstByte == fbNone {
-  			firstByte = int64(r) // ... first one
-  		} else {
-  			firstByte = fbMany // ... too many
-  			break
-  		}
-  	}
+
+	if d.prefixer != nil && d.prefixer.Prefix() != "" {
+		firstByte = 'a' // dummy for now
+	}
 
 	// Synchronize with "quick check" above.
 	atomic.StoreInt64(&info.firstbyte, firstByte)
