@@ -6,18 +6,20 @@
 package dfa
 
 import (
-	"fmt"
 	"errors"
 	"sort"
 	"sync"
 	"sync/atomic"
+
 	"matloob.io/regexp/internal/input"
 	"matloob.io/regexp/syntax"
 )
 
+// TODO(matloob): lowercase these before submitting
+
 const DebugDFA = false
 
-var DebugPrintf =  fmt.Printf //func(format string, a ...interface{}) {}
+var DebugPrintf = func(format string, a ...interface{}) {}
 
 type matchKind int
 
@@ -85,16 +87,18 @@ var errFallBack = errors.New("falling back to NFA")
 
 func (d *DFA) loadNextState(from *State, r rune) *State {
 	// TODO(matloob): Do an atomic read from from.next and eliminate mutex.
+	runerange := d.rangemap.lookup(r)
 	from.mu.Lock()
-	s := from.next[d.rangemap.lookup(r)]
+	s := from.next[runerange]
 	from.mu.Unlock()
 	return s
 }
 
 func (d *DFA) storeNextState(from *State, r rune, to *State) {
 	// TODO(matloob): Do an atomic write to from.next and eliminate mutex.
+	runerange := d.rangemap.lookup(r)
 	from.mu.Lock()
-	from.next[d.rangemap.lookup(r)] = to
+	from.next[runerange] = to
 	from.mu.Unlock()
 }
 
@@ -720,18 +724,20 @@ func (d *DFA) searchLoop(params *searchParams) bool {
 		if DebugDFA {
 			DebugPrintf("@%d: %s\n", p-bp, s.Dump())
 		}
-		if haveFirstbyte && s == start && p == params.startpos{
+		// TODO(matloob): should 'haveFirstByte' just be input.HasPrefix()?
+		if haveFirstbyte && s == start {
 			// TODO(matloob): Correct the comment
 			// In start state, only way out is to find firstbyte,
 			// so use optimized assembly in memchr to skip ahead.
 			// If firstbyte isn't found, we can skip to the end
 			// of the string.
 			if runForward {
-				p = params.input.Index(d.prefixer, p)
-				if p < 0 {
+				ix := params.input.Index(d.prefixer, p)
+				if ix < 0 {
 					p = ep
 					break
 				}
+				p += ix
 			} else {
 				panic("XXX")
 				// TODO(matloob): RINDEX!

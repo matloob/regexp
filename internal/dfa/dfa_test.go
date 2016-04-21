@@ -1,10 +1,12 @@
+// TODO(matloob): DELETE ME!
+
 package dfa
 
 import (
 	"testing"
 
-	"matloob.io/regexp/syntax"
 	"matloob.io/regexp/internal/input"
+	"matloob.io/regexp/syntax"
 )
 
 func matchDFA(regexp string, input string) (int, int, bool, error) {
