@@ -88,18 +88,18 @@ var errFallBack = errors.New("falling back to NFA")
 func (d *DFA) loadNextState(from *State, r rune) *State {
 	// TODO(matloob): Do an atomic read from from.next and eliminate mutex.
 	runerange := d.rangemap.lookup(r)
-	from.mu.Lock()
+//	from.mu.Lock()
 	s := from.next[runerange]
-	from.mu.Unlock()
+//	from.mu.Unlock()
 	return s
 }
 
 func (d *DFA) storeNextState(from *State, r rune, to *State) {
 	// TODO(matloob): Do an atomic write to from.next and eliminate mutex.
 	runerange := d.rangemap.lookup(r)
-	from.mu.Lock()
+//	from.mu.Lock()
 	from.next[runerange] = to
-	from.mu.Unlock()
+//	from.mu.Unlock()
 }
 
 func (d *DFA) analyzeSearch(params *searchParams) bool {
